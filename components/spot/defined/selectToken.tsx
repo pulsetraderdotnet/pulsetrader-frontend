@@ -11,20 +11,20 @@ import React, {
 import Link from "next/link";
 import ChainSelection from "@/components/navbar/chainSelection";
 import { motion, AnimatePresence } from "framer-motion";
-import { useShallow } from "zustand/shallow";
 import { FiSearch, FiX, FiPlus, FiInfo, FiStar } from "react-icons/fi";
 import { BiCoinStack } from "react-icons/bi";
 import { BsArrowUpRight } from "react-icons/bs";
-
 
 import { CollateralTokens } from "@/constants/common/tokens";
 import { fetchCodexFilterTokens } from "@/lib/oracle/codex";
 import { displayNumber } from "@/utility/displayPrice";
 import { formatCompactNumber } from "@/utility/handy";
-import { useStore } from "@/store/useStore";
 import { BOOKMARK_SPOT_TOKENS_STORAGE_KEY } from "@/constants/config/enviroments";
 
-// ─── Types ───────────────────────────────────────────────────────────────
+import { useStore } from "@/store/useStore";
+import { useShallow } from "zustand/shallow";
+
+// ─── Types ──────────────────────────────────────────────────────────────
 interface TokenSelectionParams {
   isOpen: boolean;
   onClose: () => void;
@@ -49,30 +49,30 @@ interface TokenInfo {
   marketCap: string;
 }
 
-// ─── Bookmark Helpers ────────────────────────────────────────────────────
-function getBookmarks(): Set<string> {
-  if (typeof window === "undefined") return new Set();
+// ─── Bookmark helpers (SSR-safe) ────────────────────────────────────────
+const getBookmarkTokens = (): string[] => {
+  if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(BOOKMARK_SPOT_TOKENS_STORAGE_KEY);
-    if (!raw) return new Set();
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return new Set(Array.isArray(parsed) ? parsed : []);
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return new Set();
+    return [];
   }
-}
+};
 
-function saveBookmarks(bookmarks: Set<string>) {
+const saveBookmarkTokens = (tokens: string[]) => {
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(
       BOOKMARK_SPOT_TOKENS_STORAGE_KEY,
-      JSON.stringify(Array.from(bookmarks))
+      JSON.stringify(tokens)
     );
   } catch {
-    // ignore
+    /* ignore quota errors */
   }
-}
+};
 
 // ─── Memoized Token Row ──────────────────────────────────────────────────
 const TokenRow = memo(
@@ -90,7 +90,8 @@ const TokenRow = memo(
     onToggleBookmark: (address: string) => void;
   }) => {
     const imageSrc = tokenInfo.token.info?.imageSmallUrl || "/tokenLogo.png";
-    const symbol = tokenInfo.token.info?.symbol || tokenInfo.token.symbol || "Unknown";
+    const symbol =
+      tokenInfo.token.info?.symbol || tokenInfo.token.symbol || "Unknown";
 
     return (
       <motion.div
@@ -169,38 +170,28 @@ const TokenList = memo(
   ({
     tokens,
     selectedToken,
-    chainId,
-    bookmarks,
+    bookmarkSet,
     onSelect,
     onToggleBookmark,
-    collateralAddresses,
   }: {
     tokens: TokenInfo[];
     selectedToken: string;
-    chainId: number;
-    bookmarks: Set<string>;
+    bookmarkSet: Set<string>;
     onSelect: (address: string) => void;
     onToggleBookmark: (address: string) => void;
-    collateralAddresses: Set<string>;
   }) => {
-    // Filter out collateral tokens and tokens that don't match the current chain
-    const filteredTokens = tokens.filter(
-      (t) =>
-        t.token.networkId === chainId &&
-        !collateralAddresses.has(t.token.address.toLowerCase())
-    );
-
     return (
       <div className="space-y-2 px-4 pb-4">
-        {filteredTokens.map((tokenInfo) => {
-          const tokenKey = `${tokenInfo.token.address.toLowerCase()}:${chainId}`;
-          const isBookmarked = bookmarks.has(tokenKey);
+        {tokens.map((tokenInfo) => {
+          const key = `${tokenInfo.token.address.toLowerCase()}:${tokenInfo.token.networkId}`;
+          const isBookmarked = bookmarkSet.has(key);
           const isSelected =
-            selectedToken.toLowerCase() === tokenInfo.token.address.toLowerCase();
+            selectedToken.toLowerCase() ===
+            tokenInfo.token.address.toLowerCase();
 
           return (
             <TokenRow
-              key={tokenInfo.token.address}
+              key={`${tokenInfo.token.address}-${tokenInfo.token.networkId}`}
               tokenInfo={tokenInfo}
               isSelected={isSelected}
               isBookmarked={isBookmarked}
@@ -223,10 +214,11 @@ const TokenSelection = ({
   selectedToken,
   setSelectedToken,
 }: TokenSelectionParams) => {
-  const { chainId, setChainId } = useStore(
+  const { chainId, setChainId, userOrders } = useStore(
     useShallow((state: any) => ({
       chainId: state.network,
       setChainId: state.setNetwork,
+      userOrders: state.userOrders,
     }))
   );
 
@@ -237,32 +229,56 @@ const TokenSelection = ({
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // ── Bookmarks state ──
-  const [bookmarks, setBookmarks] = useState<Set<string>>(() => getBookmarks());
+  // ── Bookmarks state (array of "address:chainId" keys) ──
+  const [bookmarks, setBookmarks] = useState<string[]>(() =>
+    getBookmarkTokens()
+  );
+
+  // O(1) lookup for rendering
+  const bookmarkSet = useMemo(() => new Set(bookmarks), [bookmarks]);
 
   // ── Collateral token addresses for the current chain ──
   const collateralAddresses = useMemo(() => {
-    const tokens = Object.keys(CollateralTokens[chainId]) || [];
-    return new Set(tokens.map((t: any) => t.toLowerCase()));
+    const tokens = Object.keys(CollateralTokens[chainId] || {});
+    return new Set(tokens.map((t) => t.toLowerCase()));
   }, [chainId]);
 
-  // ── Persist bookmarks to localStorage ──
-  useEffect(() => {
-    saveBookmarks(bookmarks);
-  }, [bookmarks]);
+  // ── Tokens to seed the Codex query (bookmarked + actively traded) ──
+  const searchTokens = useMemo(() => {
+    const chainKey = String(chainId);
+    const bookmarkedForChain = bookmarks.filter(
+      (token) => token.split(":")[1] === chainKey
+    );
 
-  // ── Toggle bookmark ──
+    const usedForChain = userOrders
+      .filter(
+        (order: any) =>
+          order.category === "spot" &&
+          order.chainId === chainId &&
+          order.isActive === true &&
+          !bookmarkedForChain.includes(
+            `${order.orderAsset.orderToken.address}:${order.chainId}`
+          )
+      )
+      .map(
+        (order: any) =>
+          `${order.orderAsset.orderToken.address}:${order.chainId}`
+      );
+
+    // De-duplicate
+    return Array.from(new Set([...bookmarkedForChain, ...usedForChain]));
+  }, [bookmarks, userOrders, chainId]);
+
+  // ── Toggle bookmark + persist ──
   const toggleBookmark = useCallback(
     (address: string) => {
       const key = `${address.toLowerCase()}:${chainId}`;
       setBookmarks((prev) => {
-        const newSet = new Set(prev);
-        if (newSet.has(key)) {
-          newSet.delete(key);
-        } else {
-          newSet.add(key);
-        }
-        return newSet;
+        const next = prev.includes(key)
+          ? prev.filter((k) => k !== key)
+          : [...prev, key];
+        saveBookmarkTokens(next);
+        return next;
       });
     },
     [chainId]
@@ -273,7 +289,8 @@ const TokenSelection = ({
     if (!chainId || !isOpen) return;
 
     abortControllerRef.current?.abort();
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     setLoading(true);
     setError(null);
@@ -281,9 +298,10 @@ const TokenSelection = ({
     try {
       const variables: any = {
         filters: { network: [chainId] },
-        limit: 10,
+        limit: 20,
         offset: 0,
         rankings: [{ attribute: "volume24", direction: "DESC" }],
+        ...(searchTokens.length > 0 && { tokens: searchTokens }),
       };
 
       if (deferredSearch) {
@@ -292,22 +310,19 @@ const TokenSelection = ({
 
       const tokenInfos = await fetchCodexFilterTokens({ variables });
 
-      if (!abortControllerRef.current?.signal.aborted) {
+      if (!controller.signal.aborted) {
         setFilteredTokens(tokenInfos || []);
       }
     } catch (err: any) {
-      if (
-        err.name !== "AbortError" &&
-        !abortControllerRef.current?.signal.aborted
-      ) {
+      if (err?.name !== "AbortError" && !controller.signal.aborted) {
         setError("Unable to load tokens.");
       }
     } finally {
-      if (!abortControllerRef.current?.signal.aborted) {
+      if (!controller.signal.aborted) {
         setLoading(false);
       }
     }
-  }, [chainId, isOpen, deferredSearch]);
+  }, [chainId, isOpen, deferredSearch, searchTokens]);
 
   useEffect(() => {
     if (isOpen) {
@@ -318,7 +333,7 @@ const TokenSelection = ({
     };
   }, [fetchTokenInfo, isOpen]);
 
-  // ── Clean up on close ──
+  // ── Clean up state on close ──
   useEffect(() => {
     if (!isOpen) {
       const timer = setTimeout(() => {
@@ -339,12 +354,23 @@ const TokenSelection = ({
     [setSelectedToken, onClose]
   );
 
+  // ── Visible tokens (filter out collateral + wrong chain) ──
+  const visibleTokens = useMemo(
+    () =>
+      filteredTokens.filter(
+        (t) =>
+          t.token.networkId === chainId &&
+          !collateralAddresses.has(t.token.address.toLowerCase())
+      ),
+    [filteredTokens, chainId, collateralAddresses]
+  );
+
   // ── Render helpers ──
   const renderContent = () => {
     if (loading) {
       return (
         <div className="flex flex-col justify-center items-center h-64 space-y-4">
-          <div className="w-10 h-10 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin"></div>
+          <div className="w-10 h-10 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin" />
           <p className="text-gray-500 dark:text-gray-400 text-sm">
             Finding tokens...
           </p>
@@ -369,13 +395,6 @@ const TokenSelection = ({
       );
     }
 
-    // If after filtering we have no tokens, show appropriate message
-    const visibleTokens = filteredTokens.filter(
-      (t) =>
-        t.token.networkId === chainId &&
-        !collateralAddresses.has(t.token.address.toLowerCase())
-    );
-
     if (visibleTokens.length === 0) {
       return (
         <div className="flex flex-col justify-center items-center h-64 space-y-3 px-6 text-center">
@@ -393,13 +412,11 @@ const TokenSelection = ({
 
     return (
       <TokenList
-        tokens={filteredTokens}
+        tokens={visibleTokens}
         selectedToken={selectedToken}
-        chainId={chainId}
-        bookmarks={bookmarks}
+        bookmarkSet={bookmarkSet}
         onSelect={handleTokenSelect}
         onToggleBookmark={toggleBookmark}
-        collateralAddresses={collateralAddresses}
       />
     );
   };
@@ -429,7 +446,11 @@ const TokenSelection = ({
               <BiCoinStack className="text-blue-500" />
               Select Token
             </h2>
-            <ChainSelection selectChain={chainId} setSelectChain={setChainId} pathName={''} />
+            <ChainSelection
+              selectChain={chainId}
+              setSelectChain={setChainId}
+              pathName={""}
+            />
             <button
               onClick={onClose}
               className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-all"

@@ -6,6 +6,8 @@ import { toast } from "react-hot-toast";
 import { SPOT_ORDERFLOW_METRICS } from "@/constants/common/frontend";
 import InfoTooltip from "@/components/tradeBox/TradeBoxCommon/BoxTooltip";
 import { FiCopy } from "react-icons/fi";
+import { FaTelegramPlane, FaTwitter, FaDiscord, FaGlobeAfrica } from "react-icons/fa";
+import { chainConfig } from "@/constants/common/chain"
 
 interface SpotTokenDataProps {
     tokenData: any; // Raw data from Codex (filterTokens query)
@@ -138,6 +140,8 @@ export default function SpotTokenData({
     tokenInfo,
     isLoading = false,
 }: SpotTokenDataProps) {
+
+
     // ─── Overview metrics (directly available in tokenData) ──────────────
     const overviewMetrics = useMemo(() => {
         if (!tokenData) return [];
@@ -268,7 +272,7 @@ export default function SpotTokenData({
                         </span>
                     </h2>
                     <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
-                        <span>Chain: {tokenInfo?.chainId || "—"}</span>
+                        <span className="text-blue-500 font-mono">Chain: {tokenInfo?.chainId ? chainConfig[tokenInfo?.chainId as number]?.name || "—" : "—"}</span>
                         <span>•</span>
                         <span className="truncate max-w-[200px]">
                             {tokenInfo?.address || "—"}
@@ -277,6 +281,12 @@ export default function SpotTokenData({
                             navigator.clipboard.writeText(tokenInfo?.address || "");
                             toast.success("Token address copied to clipboard");
                         }} />
+                    </div>
+                    <div className="flex gap-2 items-center">
+                        {tokenData?.token?.socialLinks?.telegram && <a target="_blank" href={tokenData?.token?.socialLinks?.telegram}><FaTelegramPlane className="w-4 h-4" /></a>}
+                        {tokenData?.token?.socialLinks?.twitter && <a target="_blank" href={tokenData?.token?.socialLinks?.twitter}><FaTwitter className="w-4 h-4" /></a>}
+                        {tokenData?.token?.socialLinks?.discord && <a target="_blank" href={tokenData?.token?.socialLinks?.discord}><FaDiscord className="w-4 h-4" /></a>}
+                        {tokenData?.token?.socialLinks?.website && <a target="_blank" href={tokenData?.token?.socialLinks?.website}><FaGlobeAfrica className="w-4 h-4" /></a>}
                     </div>
                 </div>
             </div>

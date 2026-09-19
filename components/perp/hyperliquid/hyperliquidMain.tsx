@@ -54,6 +54,7 @@ const toPriceString = (value: number) => {
 };
 
 // ── Memoized Chart Section ──────────────────────────────────────────────
+// ── Memoized Chart Section ──────────────────────────────────────────────
 const ChartSection = memo(
   ({
     selectedSymbol,
@@ -69,7 +70,7 @@ const ChartSection = memo(
     isTradeBoxOpen,
     perpTokenInfo,
     marketSnapshotRef,
-    isAdvancedSymbol
+    isAdvancedSymbol,
   }: {
     selectedSymbol: string;
     stats: HyperliquidMarketStats;
@@ -88,26 +89,33 @@ const ChartSection = memo(
   }) => (
     <div
       style={isDesktop ? { width: `${leftWidth}%` } : undefined}
-      className={`h-full flex flex-col transition-all duration-300 ${isTradeBoxOpen ? "hidden lg:flex" : "flex"
+      className={`h-full min-h-0 flex flex-col gap-2 transition-all duration-300 ${isTradeBoxOpen ? "hidden lg:flex" : "flex"
         }`}
     >
-      <ChartBox
-        tokenSymbol={selectedSymbol}
-        onSymbolChange={onSymbolChange}
-        stats={stats}
-        connected={marketConnected}
-        loading={loading}
-        error={error}
-        isAdvancedSymbol={isAdvancedSymbol}
-      />
-      <OrderBox
-        orderCategory="perpetual"
-        tokenInfo={perpTokenInfo}
-        userOrders={userOrders}
-        isConnected={userConnected}
-        protocol="hyperliquid"
-        marketSnapshotRef={marketSnapshotRef}
-      />
+      {/* Chart — fixed height container */}
+      <div className="shrink-0">
+        <ChartBox
+          tokenSymbol={selectedSymbol}
+          onSymbolChange={onSymbolChange}
+          stats={stats}
+          connected={marketConnected}
+          loading={loading}
+          error={error}
+          isAdvancedSymbol={isAdvancedSymbol}
+        />
+      </div>
+
+      {/* Order List — takes remaining height, and can shrink */}
+      <div className="flex-1 min-h-0">
+        <OrderBox
+          orderCategory="perpetual"
+          tokenInfo={perpTokenInfo}
+          userOrders={userOrders}
+          isConnected={userConnected}
+          protocol="hyperliquid"
+          marketSnapshotRef={marketSnapshotRef}
+        />
+      </div>
     </div>
   )
 );
@@ -466,10 +474,10 @@ export default function DefinedPerpMain({ tokenSymbol }: DEFINED_PERP_MAIN_PROPS
         className={`w-full h-full relative select-none ${showCaution ? "pointer-events-none opacity-30 blur-sm" : ""
           }`}
       >
-        <div className="w-full h-full overflow-hidden flex flex-col">
+        <div className="w-full h-full min-h-0 overflow-hidden flex flex-col">
           <div
             ref={containerRef}
-            className="flex-1 flex flex-col lg:flex-row bg-gray-50 dark:bg-gray-900 gap-0 p-2 overflow-hidden"
+            className="flex-1 min-h-0 flex flex-col lg:flex-row bg-gray-50 dark:bg-gray-900 gap-0 p-2 overflow-hidden"
           >
             <ChartSection
               selectedSymbol={selectedSymbol}

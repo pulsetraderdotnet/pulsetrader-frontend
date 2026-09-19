@@ -1,5 +1,5 @@
 import { OrderType, OrderStatusType } from "@/type/order";
-import { formatUnits } from "ethers";
+
 import {
   FiClock,
   FiCheckCircle,
@@ -376,10 +376,10 @@ interface OrderTableProps {
 
 export default function OrderTable({ orders }: OrderTableProps) {
   return (
-    <div className="w-full h-full rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden flex flex-col">
+    <div className="w-full h-full   bg-white dark:bg-gray-900 overflow-hidden flex flex-col">
       <div className="overflow-x-auto flex-1 custom-scrollbar">
         <table className="w-full divide-y divide-gray-200 dark:divide-gray-800">
-          <thead className="bg-gray-50 dark:bg-gray-900/50 sticky top-0 z-10">
+          <thead className="bg-white dark:bg-gray-900/50 sticky top-0 z-10">
             <tr>
               <th className="px-4 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">
                 Asset / ID

@@ -157,7 +157,7 @@ export default function ConnectionBox({
                   <span>
                     {isLoading ? "Verifying..." : "Connect with Wallet"}
                   </span>
-                  {!isLoading && <FiArrowRight />}
+
                 </button>
               </div>
             )}

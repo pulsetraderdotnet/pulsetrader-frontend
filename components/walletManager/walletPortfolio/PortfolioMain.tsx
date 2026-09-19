@@ -487,9 +487,9 @@ export default function PortfolioMain(props: PortfolioMainProps) {
                 {activeTab === "activity" && (
                   <ActivityModel user={user} walletAddress={selectedWallet.address} walletId={selectedWallet._id} />
                 )}
-                {activeTab === "analytics" && (
+                {/* {activeTab === "analytics" && (
                   <Analytics address={selectedWallet.address} chainId={chainId} />
-                )}
+                )} */}
                 {activeTab === "settings" && (
                   <WalletSettings wallet={selectedWallet} />
                 )}

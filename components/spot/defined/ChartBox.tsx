@@ -97,6 +97,8 @@ const ChartBox = memo(function ChartBox({
     setIsCollapsed(prev => !prev);
   }, []);
 
+
+
   return (
     <div className="bg-white dark:bg-gray-900 rounded-2xl font-mono shadow-sm p-1 lg:p-2 border border-gray-100 dark:border-gray-800">
       <div className="flex justify-between items-center gap-1 p-1">

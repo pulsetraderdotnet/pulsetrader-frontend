@@ -1,10 +1,19 @@
 import { memo, useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { FiSearch, FiX, FiAlertCircle, FiFilter } from "react-icons/fi";
+import {
+  FiSearch,
+  FiX,
+  FiAlertCircle,
+  FiFilter,
+  FiArrowRight,
+  FiList,
+  FiTerminal,
+} from "react-icons/fi";
 import { LuChartCandlestick } from "react-icons/lu";
 import { BiWallet } from "react-icons/bi";
 import { CiGrid2H, CiGrid41 } from "react-icons/ci";
 import { RiRefreshLine } from "react-icons/ri";
+import { motion, AnimatePresence } from "framer-motion";
 
 // Types
 import { OrderType } from "@/type/order";
@@ -18,11 +27,12 @@ import type { MarketSnapshotRef, StableMarketTokenInfo } from "@/type/market";
 // Components
 import StrategyGrouped from "./StrategyGrouped";
 import OrderTable from "./OrderTable";
+import OrderLogTerminal from "./OrderLogTerminal";
 
 interface OrderListParams {
   network?: number;
   userOrders: OrderType[];
-  orderCategory?: string; // 'all' | 'spot' | 'perpetual'
+  orderCategory?: string;
   walletAddress?: string | undefined;
   walletId?: string | undefined;
   isConnected: boolean;
@@ -31,11 +41,12 @@ interface OrderListParams {
   protocol?: string;
 }
 
-// Helper to detect mobile screen on first render (SSR-safe)
 function getInitialTableView(): boolean {
   if (typeof window === "undefined") return true;
   return window.innerWidth >= 768;
 }
+
+type ViewMode = "orders" | "terminal";
 
 const OrderList = ({
   network,
@@ -49,19 +60,20 @@ const OrderList = ({
   protocol,
 }: OrderListParams) => {
   const { getOrders } = useOrder();
-  const { ordersOnChart, setOrdersOnChart } =
-    useChartDataStore(
-      useShallow((state: any) => ({
-        ordersOnChart: state.ordersOnChart,
-        setOrdersOnChart: state.setOrdersOnChart,
-      }))
-    );
+  const { setOrdersOnChart } = useChartDataStore(
+    useShallow((state: any) => ({
+      setOrdersOnChart: state.setOrdersOnChart,
+    }))
+  );
 
   // State
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [showChartDisplayFilter, setShowChartDisplayFilter] = useState(false);
+
+  // Top-level view: Orders vs Terminal
+  const [viewMode, setViewMode] = useState<ViewMode>("orders");
 
   // Filters
   const [orderModeFilter, setOrderModeFilter] = useState<string>("all");
@@ -89,17 +101,13 @@ const OrderList = ({
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
-  // ------------------------------------------------------------------
-  // Memoized Filtering Logic (flattened and safe)
-  // ------------------------------------------------------------------
+  // ─── Filtering ─────────────────────────────────────────────────
   const tokenAddressFilter = tokenInfo?.address?.toLowerCase() ?? "";
 
   const filteredOrders = useMemo(() => {
     return userOrders.filter((o) => {
-      // Network filter – allow chainId 0
       if (network !== undefined && o.chainId !== network) return false;
 
-      // Wallet filter – handle both address and ID
       if (walletId || walletAddress) {
         const oWalletId = typeof o.wallet === "object" ? o.wallet?._id : o.wallet;
         const orderWalletAddr = o.wallet?.address;
@@ -107,9 +115,11 @@ const OrderList = ({
         if (walletId && oWalletId?.toString() !== walletId.toString()) {
           return false;
         }
-
         if (walletAddress && !walletId) {
-          if (!orderWalletAddr || orderWalletAddr.toLowerCase() !== walletAddress.toLowerCase()) {
+          if (
+            !orderWalletAddr ||
+            orderWalletAddr.toLowerCase() !== walletAddress.toLowerCase()
+          ) {
             return false;
           }
         }
@@ -119,35 +129,27 @@ const OrderList = ({
         if (o.category === "perpetual" && o.perp?.protocol !== protocol) return false;
       }
 
-      // Token filter – normalize asset filtering across Spot & Perpetual
       if (tokenAddressFilter) {
         const term = tokenAddressFilter;
-
         let isMatch = false;
         if (o.category === "spot") {
-          const spotOrderMatched = o?.orderAsset?.orderToken?.address?.toLowerCase() === term;
-          const spotColMatched = o?.orderAsset?.collateralToken?.address?.toLowerCase() === term;
+          const spotOrderMatched =
+            o?.orderAsset?.orderToken?.address?.toLowerCase() === term;
+          const spotColMatched =
+            o?.orderAsset?.collateralToken?.address?.toLowerCase() === term;
           isMatch = spotOrderMatched || spotColMatched;
         } else {
-          const perpIndexMatched = o.orderAsset?.orderToken?.address?.toLowerCase() === term;
+          const perpIndexMatched =
+            o.orderAsset?.orderToken?.address?.toLowerCase() === term;
           isMatch = perpIndexMatched;
         }
-
-        if (!isMatch) {
-          return false;
-        }
+        if (!isMatch) return false;
       }
 
-      // Category filter
       if (categoryFilter !== "all" && o.category !== categoryFilter) return false;
-
-      // Order mode filter
       if (orderModeFilter !== "all" && o.orderMode !== orderModeFilter) return false;
-
-      // Status filter
       if (statusFilter !== "all" && o.orderStatus !== statusFilter) return false;
 
-      // Search filter (name or ID)
       if (searchTerm) {
         const term = searchTerm.toLowerCase();
         const matchesName = o.name?.toLowerCase().includes(term) ?? false;
@@ -170,9 +172,7 @@ const OrderList = ({
     orderModeFilter,
   ]);
 
-  // ------------------------------------------------------------------
-  // Memoized Sorting
-  // ------------------------------------------------------------------
+  // ─── Sorting ───────────────────────────────────────────────────
   const sortedOrders = useMemo(() => {
     return [...filteredOrders].sort((a: any, b: any) => {
       const timeA = a[sortBy] ? new Date(a[sortBy]).getTime() : 0;
@@ -210,11 +210,10 @@ const OrderList = ({
       setOrdersOnChart([]);
       setChartDisplayMode("none");
     };
-  }, [setOrdersOnChart, setChartDisplayMode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setOrdersOnChart]);
 
-  // ------------------------------------------------------------------
-  // Memoized Grouping (only used in group view)
-  // ------------------------------------------------------------------
+  // ─── Grouped orders (for grid view) ─────────────────────────────
   const groupedOrders = useMemo(() => {
     return sortedOrders.reduce((groups, order) => {
       const key = order.name || "Untitled";
@@ -250,9 +249,7 @@ const OrderList = ({
     }, {} as Record<string, any>);
   }, [sortedOrders]);
 
-  // ------------------------------------------------------------------
-  // Memoized active filters flag
-  // ------------------------------------------------------------------
+  // ─── Active filters flag ───────────────────────────────────────
   const hasActiveFilters = useMemo(
     () =>
       categoryFilter !== orderCategory ||
@@ -263,9 +260,7 @@ const OrderList = ({
     [categoryFilter, orderCategory, statusFilter, searchTerm, sortBy, sortOrder]
   );
 
-  // ------------------------------------------------------------------
-  // Memoized Handlers
-  // ------------------------------------------------------------------
+  // ─── Handlers ──────────────────────────────────────────────────
   const handleRefresh = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -286,308 +281,368 @@ const OrderList = ({
     setSortOrder("desc");
   }, [orderCategory]);
 
-  // Chart mode handlers
   const handleChartModeSelect = (mode: string) => {
     setChartDisplayMode(mode);
-    // The useEffect above will update ordersOnChart
-    // Optionally close the filter panel after selection
-    // setShowChartDisplayFilter(false); // uncomment if desired
   };
 
-  // ------------------------------------------------------------------
-  // Render
-  // ------------------------------------------------------------------
+  // ─── Not connected ─────────────────────────────────────────────
   if (!isConnected) {
     return (
-      <div className="mt-6 p-8 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm flex flex-col items-center justify-center">
-        <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-300 mb-2">
-          Connect Wallet
-        </h3>
-        <p className="text-gray-500 mb-6 text-sm">
-          Please connect your wallet to view and manage your orders.
-        </p>
-        <Link href={"/connect"}>
-          <button className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg flex items-center gap-2 transition-colors">
-            <BiWallet className="w-5 h-5" /> Connect Wallet
-          </button>
-        </Link>
+      <div className="w-full h-full min-h-0 flex items-center justify-center p-4">
+        <div className="p-10 rounded-2xl border border-gray-200/50 dark:border-white/[0.05] bg-white/70 dark:bg-white/[0.02] backdrop-blur-sm flex flex-col items-center justify-center text-center max-w-md">
+          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-4">
+            <BiWallet className="w-7 h-7 text-blue-400" />
+          </div>
+          <h3 className="text-base font-bold text-gray-900 dark:text-white mb-1">
+            Connect Your Wallet
+          </h3>
+          <p className="text-gray-500 dark:text-slate-400 mb-5 text-sm max-w-xs">
+            Please connect your wallet to view and manage your orders.
+          </p>
+          <Link href="/connect">
+            <motion.button
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white font-bold rounded-xl text-sm shadow-lg shadow-blue-500/25 transition-all group"
+            >
+              <BiWallet className="w-4 h-4" /> Connect Wallet
+              <FiArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+            </motion.button>
+          </Link>
+        </div>
       </div>
     );
   }
 
+  // ─── Main Render ───────────────────────────────────────────────
   return (
-    <div className="w-full flex flex-col rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 overflow-hidden h-[800px]">
-      {/* Header Toolbar */}
-      <div className="p-4 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div>
-              <h2 className="text-xl font-bold text-gray-800 dark:text-white">
+    <div className="w-full h-full min-h-0 flex flex-col rounded-2xl border border-gray-200/50 dark:border-white/[0.06] bg-white/80 dark:bg-[#0a0c10]/90 backdrop-blur-sm overflow-hidden">
+      {/* ── Header Toolbar (fixed, does not scroll) ──────────────── */}
+      <div className="shrink-0 px-4 py-2 bg-gray-50/80 dark:bg-black/30 border-b border-gray-200/50 dark:border-white/[0.05] backdrop-blur-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 lg:mx-3">
+          {/* Left: title + counts */}
+          <div className="flex flex-col gap-2">
+            <div className="inline-flex items-center p-1 rounded-xl bg-gray-100/80 dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.06] w-fit">
+              <button
+                onClick={() => setViewMode("orders")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${viewMode === "orders"
+                    ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  }`}
+              >
+                <FiList className="w-3.5 h-3.5" />
                 Orders
-              </h2>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {userOrders.length} Total • {sortedOrders.length} Filtered
-              </p>
+              </button>
+              <button
+                onClick={() => setViewMode("terminal")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${viewMode === "terminal"
+                    ? "bg-white dark:bg-white/10 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  }`}
+              >
+                <FiTerminal className="w-3.5 h-3.5" />
+                Terminal
+              </button>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] font-mono text-slate-400">
+                {userOrders.length} total
+              </span>
+              {sortedOrders.length !== userOrders.length && (
+                <span className="text-[10px] font-mono text-blue-400">
+                  · {sortedOrders.length} filtered
+                </span>
+              )}
             </div>
           </div>
 
+          {/* Right: controls */}
           <div className="flex items-center gap-2 flex-wrap">
-            {/* View Switcher */}
-            <div className="flex items-center bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-1">
-              <button
-                onClick={() => setIsTableOrder(false)}
-                className={`p-1.5 rounded ${!isTableOrder
-                  ? "bg-blue-100 text-blue-600 dark:bg-blue-900 dark:text-blue-300"
-                  : "text-gray-500"
-                  }`}
-                title="Group View"
-              >
-                <CiGrid41 className="w-5 h-5" />
-              </button>
-              <button
-                onClick={() => setIsTableOrder(true)}
-                className={`p-1.5 rounded ${isTableOrder
-                  ? "bg-blue-100 text-blue-600 dark:bg-blue-900 dark:text-blue-300"
-                  : "text-gray-500"
-                  }`}
-                title="Table View"
-              >
-                <CiGrid2H className="w-5 h-5" />
-              </button>
-            </div>
+            {/* Grid/Table switcher — only when in Orders view */}
+            {viewMode === "orders" && (
+              <div className="flex items-center p-1 rounded-xl bg-gray-100/80 dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.06]">
+                <motion.button
+                  whileTap={{ scale: 0.94 }}
+                  onClick={() => setIsTableOrder(false)}
+                  title="Group View"
+                  className={`p-1.5 rounded-lg transition-all duration-200 ${!isTableOrder
+                      ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    }`}
+                >
+                  <CiGrid41 className="w-4 h-4" />
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.94 }}
+                  onClick={() => setIsTableOrder(true)}
+                  title="Table View"
+                  className={`p-1.5 rounded-lg transition-all duration-200 ${isTableOrder
+                      ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    }`}
+                >
+                  <CiGrid2H className="w-4 h-4" />
+                </motion.button>
+              </div>
+            )}
 
-            {/* Chart Display Filter Toggle */}
-            <button
+            {/* Chart Display */}
+            <motion.button
+              whileTap={{ scale: 0.95 }}
               onClick={() => setShowChartDisplayFilter(!showChartDisplayFilter)}
-              className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors
-                ${showChartDisplayFilter || chartDisplayMode !== "none"
-                  ? "bg-blue-50 border-blue-200 text-blue-600 dark:bg-blue-900/20 dark:border-blue-800"
-                  : "bg-white border-gray-200 text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300"
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-all ${showChartDisplayFilter || chartDisplayMode !== "none"
+                  ? "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
+                  : "bg-white/60 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
                 }`}
             >
-              <LuChartCandlestick className="w-4 h-4" />
-              Chart Display
+              <LuChartCandlestick className="w-3.5 h-3.5" />
+              Chart
               {chartDisplayMode !== "none" && (
-                <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
               )}
-            </button>
+            </motion.button>
 
-            {/* Filter Toggle */}
-            <button
+            {/* Filter toggle */}
+            <motion.button
+              whileTap={{ scale: 0.95 }}
               onClick={() => setShowFilters(!showFilters)}
-              className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg border transition-colors
-                ${showFilters || hasActiveFilters
-                  ? "bg-blue-50 border-blue-200 text-blue-600 dark:bg-blue-900/20 dark:border-blue-800"
-                  : "bg-white border-gray-200 text-gray-700 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300"
+              className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-all ${showFilters || hasActiveFilters
+                  ? "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
+                  : "bg-white/60 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
                 }`}
             >
-              <FiFilter className="w-4 h-4" />
+              <FiFilter className="w-3.5 h-3.5" />
               Filters
               {hasActiveFilters && (
-                <span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
               )}
-            </button>
+            </motion.button>
 
             {/* Refresh */}
-            <button
+            <motion.button
+              whileTap={{ scale: 0.9, rotate: 180 }}
               onClick={handleRefresh}
               disabled={isLoading}
-              className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors disabled:opacity-50"
-              title="Refresh Orders"
+              className="p-2 rounded-xl bg-white/60 dark:bg-white/[0.04] border border-gray-200/50 dark:border-white/[0.06] text-gray-500 dark:text-gray-400 hover:border-blue-400/30 hover:text-blue-500 transition-all disabled:opacity-40"
+              title="Refresh"
             >
               <RiRefreshLine
-                className={`w-5 h-5 ${isLoading ? "animate-spin" : ""}`}
+                className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`}
               />
-            </button>
+            </motion.button>
           </div>
         </div>
 
-        {/* Chart Display Filter Buttons */}
-        {showChartDisplayFilter && (
-          <div className="mt-3 p-2 bg-gray-100 dark:bg-gray-800 rounded-lg animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => handleChartModeSelect("none")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${chartDisplayMode === "none"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-              >
-                None
-              </button>
-              <button
-                onClick={() => handleChartModeSelect("all")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${chartDisplayMode === "all"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-              >
-                All
-              </button>
-              <button
-                onClick={() => handleChartModeSelect("pending")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${chartDisplayMode === "pending"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-              >
-                Pending
-              </button>
-              <button
-                onClick={() => handleChartModeSelect("opened")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${chartDisplayMode === "opened"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-              >
-                Opened
-              </button>
-              <button
-                onClick={() => handleChartModeSelect("closed")}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${chartDisplayMode === "closed"
-                  ? "bg-blue-600 text-white"
-                  : "bg-white dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
-                  }`}
-              >
-                Closed
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Filters Section */}
-        {showFilters && (
-          <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg animate-in fade-in slide-in-from-top-2 duration-200">
-            <div className="flex flex-col md:flex-row gap-3">
-              {/* Search */}
-              <div className="relative flex-grow">
-                <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Search by Name or ID..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full pl-9 pr-8 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                {searchTerm && (
-                  <button
-                    onClick={() => setSearchTerm("")}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                  >
-                    <FiX className="w-4 h-4" />
-                  </button>
-                )}
+        {/* ── Chart Display Panel ── */}
+        <AnimatePresence>
+          {showChartDisplayFilter && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+              className="overflow-hidden mt-3"
+            >
+              <div className="p-3 rounded-xl bg-gray-100/80 dark:bg-white/[0.03] border border-gray-200/40 dark:border-white/[0.05]">
+                <p className="text-[9px] font-mono uppercase tracking-widest text-slate-400 mb-2">
+                  Chart Display Mode
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {["none", "all", "pending", "opened", "closed"].map((mode) => (
+                    <button
+                      key={mode}
+                      onClick={() => handleChartModeSelect(mode)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-lg capitalize transition-all ${chartDisplayMode === mode
+                          ? "bg-blue-600 text-white shadow shadow-blue-500/30"
+                          : "bg-white dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
+                        }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
               </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-              {/* Category Select */}
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Categories</option>
-                <option value="spot">Spot</option>
-                <option value="perpetual">Perpetual</option>
-              </select>
+        {/* ── Advanced Filters Panel ── */}
+        <AnimatePresence>
+          {showFilters && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+              className="overflow-hidden mt-3"
+            >
+              <div className="p-3 rounded-xl bg-gray-100/80 dark:bg-white/[0.03] border border-gray-200/40 dark:border-white/[0.05] space-y-3">
+                <div className="relative">
+                  <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
+                  <input
+                    type="text"
+                    placeholder="Search by name or ID..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="w-full pl-9 pr-8 py-2 text-sm rounded-xl border border-gray-200/50 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:text-white focus:ring-2 focus:ring-blue-500/40 outline-none transition-all placeholder:text-gray-400 dark:placeholder:text-slate-600"
+                  />
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm("")}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      <FiX className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
 
-              <select
-                value={orderModeFilter}
-                onChange={(e) => setOrderModeFilter(e.target.value)}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Order Modes</option>
-                <option value="Live">Live</option>
-                <option value="Testnet">Testnet</option>
-                <option value="Demo">Demo</option>
-              </select>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm rounded-xl border border-gray-200/50 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:text-white outline-none focus:ring-2 focus:ring-blue-500/40"
+                  >
+                    <option value="all">All Categories</option>
+                    <option value="spot">Spot</option>
+                    <option value="perpetual">Perpetual</option>
+                  </select>
 
-              {/* Status Select */}
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="all">All Status</option>
-                <option value="PENDING">Pending</option>
-                <option value="OPENED">Opened</option>
-                <option value="CLOSED">Closed</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
+                  <select
+                    value={orderModeFilter}
+                    onChange={(e) => setOrderModeFilter(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm rounded-xl border border-gray-200/50 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:text-white outline-none focus:ring-2 focus:ring-blue-500/40"
+                  >
+                    <option value="all">All Modes</option>
+                    <option value="Live">Live</option>
+                    <option value="Testnet">Testnet</option>
+                    <option value="Demo">Demo</option>
+                  </select>
 
-              {/* Sort By */}
-              <select
-                value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="createdAt">Sort: Created</option>
-                <option value="updatedAt">Sort: Updated</option>
-              </select>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm rounded-xl border border-gray-200/50 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:text-white outline-none focus:ring-2 focus:ring-blue-500/40"
+                  >
+                    <option value="createdAt">Sort: Created</option>
+                    <option value="updatedAt">Sort: Updated</option>
+                  </select>
 
-              {/* Sort Order */}
-              <select
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-                className="px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-white outline-none focus:ring-2 focus:ring-blue-500"
-              >
-                <option value="desc">Newest First</option>
-                <option value="asc">Oldest First</option>
-              </select>
+                  <select
+                    value={sortOrder}
+                    onChange={(e) => setSortOrder(e.target.value)}
+                    className="flex-1 px-3 py-2 text-sm rounded-xl border border-gray-200/50 dark:border-white/[0.08] bg-white dark:bg-white/[0.04] dark:text-white outline-none focus:ring-2 focus:ring-blue-500/40"
+                  >
+                    <option value="desc">Newest First</option>
+                    <option value="asc">Oldest First</option>
+                  </select>
 
-              {/* Clear Filters */}
-              {hasActiveFilters && (
-                <button
-                  onClick={handleClearFilters}
-                  className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md border border-red-200 dark:border-red-800 transition-colors whitespace-nowrap"
-                >
-                  <FiX className="w-4 h-4" /> Clear
-                </button>
-              )}
-            </div>
-          </div>
-        )}
+                  {hasActiveFilters && (
+                    <button
+                      onClick={handleClearFilters}
+                      className="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-red-500 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-xl border border-red-200/50 dark:border-red-800/50 transition-colors whitespace-nowrap"
+                    >
+                      <FiX className="w-3.5 h-3.5" /> Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Content Area */}
-      <div className="flex-1 overflow-y-auto p-4 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600">
+      {/* ── Content Area (flex-1 + min-h-0 so it scrolls internally) ── */}
+      <div className="flex-1 min-h-0 overflow-y-auto p-3">
         {error && (
-          <div className="mb-4 p-4 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 rounded-lg flex items-center gap-2">
-            <FiAlertCircle /> {error}
-          </div>
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-3 p-3 bg-red-50/80 dark:bg-red-500/10 text-red-700 dark:text-red-400 rounded-2xl border border-red-200/50 dark:border-red-500/20 flex items-center gap-2 text-sm"
+          >
+            <FiAlertCircle className="w-4 h-4 flex-shrink-0" /> {error}
+          </motion.div>
         )}
 
         {sortedOrders.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-gray-400">
-            <div className="p-1 lg:p-4 bg-gray-50 dark:bg-gray-800 rounded-full mb-3">
-              <FiSearch className="w-8 h-8 opacity-50" />
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+            className="flex flex-col items-center justify-center py-16 text-center"
+          >
+            <div className="w-20 h-20 rounded-3xl bg-gray-100/80 dark:bg-white/[0.04] border border-gray-200/50 dark:border-white/[0.06] flex items-center justify-center mb-5">
+              <FiSearch className="w-9 h-9 text-gray-300 dark:text-slate-600" />
             </div>
-            <p>No orders found matching your filters.</p>
-            {hasActiveFilters && (
+            <h3 className="text-base font-bold text-gray-800 dark:text-white mb-1">
+              {hasActiveFilters ? "No orders match your filters" : "No orders yet"}
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-slate-500 max-w-xs">
+              {hasActiveFilters
+                ? "Try adjusting your filters to see more results."
+                : "Go to Strategy to create your first automated order."}
+            </p>
+            {hasActiveFilters ? (
               <button
                 onClick={handleClearFilters}
-                className="mt-3 text-sm text-blue-500 hover:underline"
+                className="mt-4 px-4 py-2 text-sm font-semibold text-blue-500 hover:bg-blue-500/10 rounded-xl border border-blue-500/20 transition-colors"
               >
                 Clear all filters
               </button>
-            )}
-          </div>
-        ) : (
-          <>
-            {isTableOrder ? (
-              <OrderTable orders={sortedOrders} />
             ) : (
-              <div className="space-y-2 xl:space-y-4">
-                {Object.entries(groupedOrders).map(([name, data]: [string, any]) => (
-                  <StrategyGrouped
-                    key={name}
-                    strategyName={name}
-                    groupData={data}
-                    marketSnapshotRef={marketSnapshotRef}
-                  />
-                ))}
-              </div>
+              <Link href="/strategy">
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  className="mt-4 flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-500/20"
+                >
+                  Start a Strategy <FiArrowRight className="w-4 h-4" />
+                </motion.button>
+              </Link>
             )}
-          </>
+          </motion.div>
+        ) : (
+          <AnimatePresence mode="wait">
+            {viewMode === "terminal" ? (
+              <motion.div
+                key="terminal"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                transition={{ duration: 0.2 }}
+              >
+                <OrderLogTerminal orders={sortedOrders} />
+              </motion.div>
+            ) : isTableOrder ? (
+              <motion.div
+                key="table"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+              >
+                <OrderTable orders={sortedOrders} />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="grid"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="space-y-2 xl:space-y-3"
+              >
+                {Object.entries(groupedOrders).map(
+                  ([name, data]: [string, any]) => (
+                    <StrategyGrouped
+                      key={name}
+                      strategyName={name}
+                      groupData={data}
+                      marketSnapshotRef={marketSnapshotRef}
+                    />
+                  )
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
         )}
       </div>
     </div>
@@ -596,7 +651,7 @@ const OrderList = ({
 
 const areEqualOrderListProps = (
   previous: OrderListParams,
-  next: OrderListParams,
+  next: OrderListParams
 ) => {
   return (
     previous.network === next.network &&

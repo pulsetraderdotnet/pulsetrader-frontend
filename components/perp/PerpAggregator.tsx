@@ -140,7 +140,7 @@ const PerpAggregator: React.FC<PerpAggregatorProps> = ({
                     <span className="bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded text-blue-800 dark:text-blue-200">
                         {symbol}
                     </span>
-                    <span className="text-sm font-normal text-gray-500">Detailed Market Data</span>
+                    <span className="text-sm font-normal text-gray-500">Market Aggregator  Data</span>
                 </h2>
                 <button
                     onClick={refetch}

@@ -114,6 +114,7 @@ const getPerpAccountBalance = async ({
   const dexKey = normalizeProtocolKey(protocol);
 
   try {
+
     const raw: number | undefined = await getPerpExchangeAvailableBalance(
       wallet.address,
       dexKey,

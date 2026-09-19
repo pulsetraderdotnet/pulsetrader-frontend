@@ -94,7 +94,7 @@ export default function StrategyGroup({
   };
 
   return (
-    <div className="mb-4 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+    <div className="mb-4 bg-gray-50 dark:bg-gray-900/50   overflow-hidden">
       {/* Header */}
       <div className="bg-white dark:bg-gray-900 p-0 border-b border-gray-100 dark:border-gray-800">
         <div

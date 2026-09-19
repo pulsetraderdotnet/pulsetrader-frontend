@@ -430,9 +430,7 @@ export const useOrder = () => {
       }
 
       if (user.status !== "admin") {
-        console.log(user.status, systemInfo.userLevels)
         const state = systemInfo.userLevels[user.status];
-        console.log(state)
         if (!state) {
           notifyFromApiError("USER_NOT_ELIGIBLE");
           orderAddResult.error = "USER_NOT_ELIGIBLE";
