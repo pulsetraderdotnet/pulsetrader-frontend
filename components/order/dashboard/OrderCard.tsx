@@ -271,6 +271,14 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
   const executionLogs = order.executionDetails?.logs || [];
   const sortedLogs = [...executionLogs].sort((a, b) => b.at - a.at);
 
+  const trailingLabel = order.exit.isTrailingMode ? (
+    <span className="text-[9px] font-bold text-blue-500 uppercase">Trailing</span>
+  ) : null;
+
+  const reEntranceLabel = order.reEntrance?.isReEntrance ? (
+    <span className="text-[9px] font-bold text-blue-500 uppercase">ReEntrance ({order.reEntrance?.rePlay || 0} / {order.reEntrance?.reEntranceLimit})</span>
+  ) : null;
+
   // ─── Card Styling based on order mode ─────────────────────────────
   const cardClasses = cn(
     "rounded-lg shadow-sm hover:shadow-md transition-shadow border border-gray-200 dark:border-gray-800",
@@ -311,7 +319,7 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
                       : "text-green-600 dark:text-green-400"
                       }`}
                   >
-                    {order.perp?.isLong ? "LONG" : "SHORT"}
+                    {order?.additional?.orderLabel ? order?.additional?.orderLabel : ''}{order.perp?.isLong ? "LONG" : "SHORT"}
                   </span>
                 )}
                 <span>
@@ -394,9 +402,10 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
                         </div>
                       )
                     )}
-                    {order.exit?.isTrailingMode && (
-                      <span className="text-[9px] font-bold text-blue-500 uppercase">Trailing</span>
-                    )}
+                    <div className="flex gap-1 items-center">
+                      {trailingLabel && <div>{trailingLabel}</div>}
+                      {reEntranceLabel && <div>{reEntranceLabel}</div>}
+                    </div>
                   </div>
                 </div>
               </div>

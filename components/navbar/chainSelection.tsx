@@ -27,7 +27,7 @@ export default function ChainSelection({
   }, []);
 
   const activeChain = chainConfig[selectChain];
-  
+
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -51,7 +51,7 @@ export default function ChainSelection({
       {isOpen && (
         <div className="absolute top-full right-0 mt-2 w-52 bg-white dark:bg-gray-900 border border-gray-200 dark:border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50">
           <div className="p-1">
-            {filterChain.filter(c => c.isActive == true).map((chain: any) => (
+            {filterChain.filter((c: any) => c?.isActive == true).map((chain: any) => (
               <button
                 key={chain.chainId}
                 onClick={() => {

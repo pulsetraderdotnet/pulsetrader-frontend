@@ -7,6 +7,8 @@ interface LeverageInputProps {
   maxLeverage?: number;
 }
 
+const MIN_LEVERAGE = 1;
+
 const LeverageInput = ({
   leverage,
   onLeverageChange,
@@ -17,15 +19,35 @@ const LeverageInput = ({
     if (!Number.isFinite(parsedMax) || parsedMax <= 0) {
       return 50;
     }
-    return Math.max(1, Math.floor(parsedMax));
+    return Math.max(MIN_LEVERAGE, Math.floor(parsedMax));
   }, [maxLeverage]);
 
-  const [inputValue, setInputValue] = useState(String(leverage));
+  const clampLeverage = (value: number) => {
+    if (!Number.isFinite(value)) {
+      return MIN_LEVERAGE;
+    }
+
+    return Math.min(
+      resolvedMaxLeverage,
+      Math.max(MIN_LEVERAGE, Math.floor(value))
+    );
+  };
+
+  const safeLeverage = clampLeverage(leverage);
+
+  const [inputValue, setInputValue] = useState(String(safeLeverage));
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setInputValue(String(leverage));
-  }, [leverage]);
+    setInputValue(String(safeLeverage));
+  }, [safeLeverage]);
+
+  // If parent accidentally passes 0 or below min, push a valid value back up.
+  useEffect(() => {
+    if (leverage !== safeLeverage) {
+      onLeverageChange(safeLeverage);
+    }
+  }, [leverage, safeLeverage, onLeverageChange]);
 
   const handleFocus = () => {
     inputRef.current?.select();
@@ -34,18 +56,37 @@ const LeverageInput = ({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
     setInputValue(raw);
-    let num = parseFloat(raw);
-    if (isNaN(num) || raw.trim() === "") {
-      num = 0;
+
+    // Do not convert empty input to 0 while the user is editing.
+    if (raw.trim() === "") {
+      return;
     }
-    if (num > resolvedMaxLeverage) num = resolvedMaxLeverage;
-    if (num < 0) num = 0;
-    onLeverageChange(num);
+
+    const num = Number(raw);
+    if (!Number.isFinite(num)) {
+      return;
+    }
+
+    const next = clampLeverage(num);
+    setInputValue(String(next));
+    onLeverageChange(next);
+  };
+
+  const handleBlur = () => {
+    const num = Number(inputValue);
+
+    const next =
+      inputValue.trim() === "" || !Number.isFinite(num)
+        ? safeLeverage
+        : clampLeverage(num);
+
+    setInputValue(String(next));
+    onLeverageChange(next);
   };
 
   const handleSliderChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = parseInt(e.target.value);
-    onLeverageChange(val);
+    const next = clampLeverage(Number(e.target.value));
+    onLeverageChange(next);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -54,10 +95,18 @@ const LeverageInput = ({
     }
   };
 
-  const fillPercentage = Math.min(
-    (leverage / resolvedMaxLeverage) * 100,
-    100
-  );
+  const fillPercentage =
+    resolvedMaxLeverage <= MIN_LEVERAGE
+      ? 100
+      : Math.min(
+        100,
+        Math.max(
+          0,
+          ((safeLeverage - MIN_LEVERAGE) /
+            (resolvedMaxLeverage - MIN_LEVERAGE)) *
+          100
+        )
+      );
 
   return (
     <div className="space-y-2">
@@ -70,13 +119,14 @@ const LeverageInput = ({
           />
         </label>
       </div>
+
       <div className="flex items-center gap-3">
         <input
           type="range"
-          min="0"
+          min={MIN_LEVERAGE}
           max={resolvedMaxLeverage}
           step="1"
-          value={leverage}
+          value={safeLeverage}
           onChange={handleSliderChange}
           className="flex-1 h-2 rounded-lg appearance-none cursor-pointer transition-all"
           style={{
@@ -85,20 +135,23 @@ const LeverageInput = ({
             backgroundRepeat: "no-repeat",
           }}
         />
+
         <div className="w-24">
           <input
             ref={inputRef}
             type="number"
-            min="0"
+            min={MIN_LEVERAGE}
             max={resolvedMaxLeverage}
             step="1"
             value={inputValue}
             onChange={handleInputChange}
             onFocus={handleFocus}
+            onBlur={handleBlur}
             onKeyDown={handleKeyDown}
             className="w-full px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-gray-900 dark:text-white transition-all"
           />
         </div>
+
         <span className="text-sm text-gray-600 dark:text-gray-400">X</span>
       </div>
     </div>

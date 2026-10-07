@@ -11,6 +11,7 @@ import { decodeText, } from "@/lib/crypto-encryption/encryption";
 import { encryptAuthToken } from "@/lib/crypto-encryption/authToken";
 
 // Config
+import { updateNetworkConfig } from "@/constants/common/chain"
 import {
   TOKEN_STORAGE_KEY,
   ACCOUNT_STORAGE_KEY,
@@ -642,6 +643,7 @@ export const useUserAuth = () => {
         notifyFromApiError(key);
         return;
       }
+      updateNetworkConfig(apiResponse.data.chainConfigs)
       setSystemInfo(apiResponse.data);
     } catch (error: any) {
       const key = handleServerErrorToast({ err: error });

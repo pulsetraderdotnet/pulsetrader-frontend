@@ -54,7 +54,7 @@ export const useOrder = () => {
       tpPercentage,
       slPercentage,
       isReEntrance,
-      reEntrancePercentage,
+      reEntranceLimit,
       slippage,
       leverage,
       isLong,
@@ -63,13 +63,24 @@ export const useOrder = () => {
       feeToken,
       feeTokenPrice,
       user,
+      orderLabel,
+      orderLable,
     } = config;
 
-    const parsedEntryPrice = safeParseUnits(targetPrice, PRECISION_DECIMALS);
-    const parsedBaseAmount = safeParseUnits(initialOrderSize, collateralToken.decimals);
+    const validTargetPrice =
+      targetPrice && !isNaN(Number(targetPrice)) && Number(targetPrice) >= 0
+        ? String(targetPrice)
+        : "0";
+    const validInitialOrderSize =
+      initialOrderSize && !isNaN(Number(initialOrderSize)) && Number(initialOrderSize) >= 0
+        ? String(initialOrderSize)
+        : "0";
+
+    const parsedEntryPrice = safeParseUnits(validTargetPrice, PRECISION_DECIMALS);
+    const parsedBaseAmount = safeParseUnits(validInitialOrderSize, collateralToken?.decimals || 18);
     const slBps = Math.floor(slPercentage * 100);
     const tpBps = Math.floor(tpPercentage * 100);
-    const ifFeeExempt = user.status === "admin" || isTradeFeeExemptStatus(systemInfo.userLevels, user.status, mode);
+    const ifFeeExempt = user?.status === "admin" || isTradeFeeExemptStatus(systemInfo.userLevels, user?.status, mode);
     const effectiveFeeToken = ifFeeExempt ? null : feeToken;   // <-- use this in baseOrder
 
     // let parsedFeeTokenPrice: bigint | undefined;
@@ -143,11 +154,13 @@ export const useOrder = () => {
       },
       reEntrance: {
         isReEntrance,
-        reEntranceLimit: Math.floor(reEntrancePercentage * 100),
+        rePlay: 0,
+        reEntranceLimit: Math.floor(reEntranceLimit),
       },
       isActive: true,
       isBusy: false,
       additional: {
+        orderLabel: orderLabel || config.additional?.orderLabel,
         priority: Number(priority),
         executionSpeed,
         retry: 0,
@@ -240,7 +253,7 @@ export const useOrder = () => {
       tpPercentage,
       slPercentage,
       isReEntrance,
-      reEntrancePercentage,
+      reEntranceLimit,
       slippage,
       feeToken,
     } = config;
@@ -295,7 +308,8 @@ export const useOrder = () => {
       },
       reEntrance: {
         isReEntrance,
-        reEntranceLimit: Math.floor(reEntrancePercentage * 100),
+        rePlay: 0,
+        reEntranceLimit: Math.floor(reEntranceLimit),
       },
       spot: {
         slippageBps: Number(slippage),
@@ -402,6 +416,7 @@ export const useOrder = () => {
     user: any;
   }) => {
     let orderAddResult = { added: false, error: null as string | null };
+    console.log(estOrders)
     try {
       if (estOrders.length === 0 || !areWalletsReady) {
         notifyFromApiError("INVALID_EST_ORDERS");
@@ -468,11 +483,19 @@ export const useOrder = () => {
       }
 
 
+      const resolvedOrderLabel = orderParams.orderLabel || orderParams.orderLable || orderParams.additional?.orderLabel || orderParams.additional?.orderLable;
       const payload = {
         orderParams: {
           ...orderParams,
           category,
           name: orderParams.orderName,
+          orderLabel: resolvedOrderLabel,
+          orderLable: resolvedOrderLabel,
+          additional: {
+            ...orderParams.additional,
+            orderLabel: resolvedOrderLabel,
+            orderLable: resolvedOrderLabel,
+          },
         },
         gridsByWallet: _gridsByWallet,
       };

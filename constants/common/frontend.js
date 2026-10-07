@@ -50,7 +50,8 @@ import {
   FiRepeat,
   FiSettings,
   FiActivity,
-  FiLayers
+  FiLayers,
+  FiLink
 } from "react-icons/fi";
 
 
@@ -66,7 +67,7 @@ export const PerpetualStrategies = [
       "Good for precise entries",
       "Simple execution",
     ],
-    recommendedFor: "Traders who want to enter at specific price levels",
+    recommendedFor: "Trader",
     type: "Premium"
   },
   {
@@ -75,11 +76,11 @@ export const PerpetualStrategies = [
     description: "Create multiple orders in a grid pattern",
     icon: <FiGrid className="w-5 h-5" />,
     features: [
-      "Multiple entry/exit points",
-      "Profit from sideways markets",
-      "Automated rebalancing",
+      "Multiple entry",
+      "One exit",
+      "Automated rebalancing Multiple order",
     ],
-    recommendedFor: "Traders in ranging or trending markets",
+    recommendedFor: "Investor",
     type: "Premium"
   },
   {
@@ -102,6 +103,21 @@ export const PerpetualStrategies = [
     icon: <FiSettings className="w-5 h-5" />,
     features: ["Advanced Indicator access", "Indicator based Strategy",],
     recommendedFor: "Traders who want to trade based on algorithmic indicators",
+    type: "Advanced"
+  },
+  {
+    id: "pairTrading",
+    name: "Pair Trading / Hedge",
+    description: "Simultaneous trend & counter-trend orders",
+    icon: <FiLink className="w-5 h-5" />,
+    features: [
+      "Hedge mode via dual accounts",
+      "Two wallets, two directions",
+      "Profit from sideways markets",
+      "Trend order: big TP/SL",
+      "CT order: algo-driven short-term exits",
+    ],
+    recommendedFor: "Confident Traders in ranging or trending markets",
     type: "Advanced"
   }
 ];

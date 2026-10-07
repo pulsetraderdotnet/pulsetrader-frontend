@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   FiX,
@@ -8,7 +8,9 @@ import {
   FiMoreVertical,
   FiChevronUp,
   FiChevronDown,
-  FiActivity
+  FiActivity,
+  FiTrendingUp,
+  FiTrendingDown,
 } from "react-icons/fi";
 import { OrderType } from "@/type/order";
 import { useOrder } from "@/hooks/useOrder";
@@ -16,6 +18,12 @@ import type { MarketSnapshotRef } from "@/type/market";
 
 import OrderCard from "./OrderCard";
 import ConfirmationModal from "@/components/common/Confirmation/ConfirmationBox";
+import ToolTip from "@/components/tradeBox/TradeBoxCommon/BoxTooltip";
+import { calculatePerpPnl } from "@/utility/orderUtility";
+import { safeFormatNumber, safeParseUnits } from "@/utility/handy";
+import { displayNumber } from "@/utility/displayPrice";
+import { PRECISION, PRECISION_DECIMALS } from "@/constants/common/utils";
+import { cn } from "@/lib/utils";
 
 interface StrategyGroupProps {
   strategyName: string;
@@ -30,9 +38,86 @@ interface StrategyGroupProps {
       opened: number;
       reverted: number;
       closed: number;
-    }
+    };
   };
   marketSnapshotRef?: MarketSnapshotRef;
+}
+
+// ─── PnL Calculation (mirrors OrderCard.tsx logic) ────────────────────
+function computeOrderPnl(
+  order: OrderType,
+  livePriceUsd: string,
+  liveMarkPrice: number
+): bigint {
+  const isSpot = order.category === "spot";
+  const isPerp = order.category === "perpetual";
+
+  const totalFee =
+    BigInt(order.cost?.txFeeInUsd || "0") +
+    BigInt(order.cost?.protocolFeeInUsd || "0");
+
+  // Realized PnL takes precedence (settled/closed orders)
+  const realized = order.executionDetails?.realizedPnlUsd;
+  if (realized && realized !== "0") {
+    try {
+      return BigInt(realized);
+    } catch {
+      /* fall through */
+    }
+  }
+
+  // Spot SELL: estimated PnL vs current price
+  if (isSpot) {
+    if (order.orderType !== "SELL") return BigInt(0);
+    const tokenAmount = BigInt(order.spot?.amount?.tokenAmount || 0);
+    if (tokenAmount === BigInt(0)) return BigInt(0);
+    const currentPriceUsd = safeParseUnits(
+      livePriceUsd || "0",
+      PRECISION_DECIMALS
+    );
+    if (currentPriceUsd === BigInt(0)) return BigInt(0);
+    const soldValue = (currentPriceUsd * tokenAmount) / PRECISION;
+    const payInUsd = BigInt(order.cost?.payInUsd || 0);
+    return soldValue - payInUsd - totalFee * BigInt(2);
+  }
+
+  // Perp OPENED: unrealized PnL vs mark price
+  if (isPerp && order.orderStatus === "OPENED") {
+    const entryPrice =
+      order.executionDetails?.entryPriceUsd ||
+      order.entry?.priceEntry?.targetPriceUsd ||
+      "0";
+    const markPriceUsd = safeParseUnits(
+      liveMarkPrice > 0 ? String(liveMarkPrice) : livePriceUsd || "0",
+      PRECISION_DECIMALS
+    );
+    const normalizedEntryPrice = BigInt(entryPrice || "0");
+    if (markPriceUsd === BigInt(0) || normalizedEntryPrice === BigInt(0)) {
+      return BigInt(0);
+    }
+    const rawPnl = calculatePerpPnl({
+      entryPrice: normalizedEntryPrice,
+      markPrice: markPriceUsd,
+      quantity: order.perp?.amount?.quantity || "0",
+      isLong: order.perp?.isLong !== false,
+    });
+    return rawPnl - totalFee * BigInt(2);
+  }
+
+  return BigInt(0);
+}
+
+// ─── Format bigint PnL as JSX (displayNumber returns a React node) ────
+function formatUsdFromBigInt(value: bigint): React.ReactNode {
+  const num = Number(
+    safeFormatNumber(value.toString(), PRECISION_DECIMALS, 8)
+  );
+  const isNegative = num < 0;
+  return (
+    <span className="font-mono">
+      {isNegative ? "-" : ""}${displayNumber(Math.abs(num))}
+    </span>
+  );
 }
 
 export default function StrategyGroup({
@@ -55,14 +140,51 @@ export default function StrategyGroup({
 
   const actionsRef = useRef<HTMLDivElement>(null);
 
+  // ─── Live market state (polled from marketSnapshotRef) ──────────────
+  const [livePriceUsd, setLivePriceUsd] = useState(
+    () => marketSnapshotRef?.current?.priceUsd || "0"
+  );
+  const [liveMarkPrice, setLiveMarkPrice] = useState(
+    () => marketSnapshotRef?.current?.markPrice || 0
+  );
+
+  useEffect(() => {
+    if (!marketSnapshotRef) return;
+    const sync = () => {
+      const nextPrice = marketSnapshotRef.current?.priceUsd || "0";
+      const nextMark = marketSnapshotRef.current?.markPrice || 0;
+      setLivePriceUsd((prev) => (prev === nextPrice ? prev : nextPrice));
+      setLiveMarkPrice((prev) => (prev === nextMark ? prev : nextMark));
+    };
+    sync();
+    const id = window.setInterval(sync, 1000);
+    return () => window.clearInterval(id);
+  }, [marketSnapshotRef]);
+
+  // ─── Combined PnL across all orders in this group ───────────────────
+  const combinedPnl = useMemo(() => {
+    return orders.reduce(
+      (sum, order) =>
+        sum + computeOrderPnl(order, livePriceUsd, liveMarkPrice),
+      BigInt(0)
+    );
+  }, [orders, livePriceUsd, liveMarkPrice]);
+
+  const hasPnlValue = combinedPnl !== BigInt(0);
+
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (showStrategyActions && actionsRef.current && !actionsRef.current.contains(event.target as Node)) {
+      if (
+        showStrategyActions &&
+        actionsRef.current &&
+        !actionsRef.current.contains(event.target as Node)
+      ) {
         setShowStrategyActions(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    return () =>
+      document.removeEventListener("mousedown", handleClickOutside);
   }, [showStrategyActions]);
 
   const handleCloseStrategy = () => {
@@ -70,7 +192,7 @@ export default function StrategyGroup({
       title: "Close Strategy Positions",
       description: `Are you sure you want to market close all ${stats.opened} active positions in "${strategyName}"?`,
       onSubmit: async () => {
-        await closeStrategy({ strategy, category, strategyName }); // Ensure backend accepts name if needed
+        await closeStrategy({ strategy, category, strategyName });
         setConfirmationConfig(null);
         setShowStrategyActions(false);
       },
@@ -94,7 +216,7 @@ export default function StrategyGroup({
   };
 
   return (
-    <div className="mb-4 bg-gray-50 dark:bg-gray-900/50   overflow-hidden">
+    <div className="mb-4 bg-gray-50 dark:bg-gray-900/50 overflow-hidden">
       {/* Header */}
       <div className="bg-white dark:bg-gray-900 p-0 border-b border-gray-100 dark:border-gray-800">
         <div
@@ -147,10 +269,45 @@ export default function StrategyGroup({
                   <FiCheckCircle /> {stats.closed} Done
                 </span>
               )}
+
+              {/* Combined PnL */}
+              {hasPnlValue && (
+                <>
+                  <div className="w-px h-3 bg-gray-300 dark:bg-gray-700"></div>
+                  <span
+                    className={cn(
+                      "flex items-center gap-1 font-semibold",
+                      combinedPnl > BigInt(0)
+                        ? "text-green-600 dark:text-green-400"
+                        : "text-red-600 dark:text-red-400"
+                    )}
+                  >
+                    {combinedPnl > BigInt(0) ? (
+                      <FiTrendingUp className="w-3.5 h-3.5" />
+                    ) : (
+                      <FiTrendingDown className="w-3.5 h-3.5" />
+                    )}
+                    {combinedPnl > BigInt(0) && (
+                      <span className="font-mono">+</span>
+                    )}
+                    {formatUsdFromBigInt(combinedPnl)}
+                    <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">
+                      Combined PnL
+                    </span>
+                    <ToolTip
+                      id={`combined-pnl-${strategyName}`}
+                      content="Combined PnL across all orders in this strategy (realized + estimated unrealized, net of fees)."
+                    />
+                  </span>
+                </>
+              )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <div
+            className="flex items-center gap-2"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="relative" ref={actionsRef}>
               <button
                 className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors text-gray-500"
@@ -192,7 +349,7 @@ export default function StrategyGroup({
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
-            className="p-2 sm:p-4 grid grid-cols-1  gap-4"
+            className="p-2 sm:p-4 grid grid-cols-1 gap-4"
           >
             {orders.map((order) => (
               <OrderCard

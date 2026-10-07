@@ -23,6 +23,7 @@ import NumberInput from "./TradeBoxCommon/NumberInput";
 import EstSpotOrders from "@/components/order/estimate/estPerpOrder";
 import PerpAccountSelect from "@/components/walletManager/selection/perpAccountSelect";
 import ConfirmationModal from "../common/Confirmation/ConfirmationBox";
+import PairTradingPanel, { type PairTradingConfig } from "./PairTradingPanel";
 
 // hook
 import { useOrder } from "@/hooks/useOrder";
@@ -43,6 +44,7 @@ import {
 } from "@/utility/orderUtility";
 import { displayNumber } from "@/utility/displayPrice";
 import type { MarketSnapshotRef, StableMarketTokenInfo } from "@/type/market";
+import { normalizeCoin } from "@/utility/perpUtils"
 
 const EST_PERP_MAINTENANCE_BPS = 50;
 
@@ -163,10 +165,24 @@ function PerpTradeBox({
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
   const [creationPending, setCreationPending] = useState(false);
 
+  // ── Pair Trading State ─────────────────────────────────────────────────────
+  const [pairConfig, setPairConfig] = useState<PairTradingConfig | null>(null);
+  const [pairIsReady, setPairIsReady] = useState(false);
+
+  const handlePairConfigChange = useCallback(
+    (config: PairTradingConfig, ready: boolean) => {
+      setPairConfig(config);
+      setPairIsReady(ready);
+    },
+    [],
+  );
+
   // Strategy & Token State
   const [selectedStrategy, setSelectedStrategy] = useState(
     PerpetualStrategies[0],
   );
+  const isPairTrading = selectedStrategy.id === "pairTrading";
+
   const [collateralToken, setCollateralToken] = useState<any>(
     Object.values(PerpCollateral[42161])[0],
   );
@@ -196,7 +212,9 @@ function PerpTradeBox({
 
   const [isTrailingMode, setIsTrailingMode] = useState<boolean>(false);
   const [isReEntrance, setIsReEntrance] = useState<boolean>(false);
-  const [reEntrancePercentage, setReEntrancePercentage] = useState<number>(1);
+  const [reEntranceLimit, setReEntranceLimit] = useState<number>(1);
+
+  const PERP_MINIMUM_ORDER_SIZE = config.minimumOrderSize < 10 ? 10 : config.minimumOrderSize;
 
   // Advanced Settings State
   const priority = 2;
@@ -647,6 +665,17 @@ function PerpTradeBox({
   const { isReady, submitText } = useMemo(() => {
     const withStatus = (isValid: boolean, text: string) => ({ isReady: isValid, submitText: text });
 
+    // Pair trading has its own validation inside PairTradingPanel
+    if (isPairTrading) {
+      if (!isOrderNameValidate || orderName.trim() === "") {
+        return withStatus(false, "Set Unique Name");
+      }
+      if (!isConnected) {
+        return withStatus(false, "Connect your wallet");
+      }
+      return withStatus(pairIsReady, pairIsReady ? "Create Pair Orders" : "Complete Pair Setup");
+    }
+
     let _submitText = "Create Order";
 
     if (selectedStrategy.id === "algo") {
@@ -698,7 +727,7 @@ function PerpTradeBox({
 
     if (
       isReEntrance &&
-      (reEntrancePercentage <= 0 || reEntrancePercentage.toString() === "")
+      (reEntranceLimit <= 0 || reEntranceLimit.toString() === "")
     ) {
       return withStatus(false, "Set re-entrance % in re-entrance mode");
     }
@@ -728,8 +757,8 @@ function PerpTradeBox({
       return withStatus(false, "Slippage should be greater then 0.4");
     }
 
-    if (estimatedUsdValue < config.minimumOrderSize) {
-      return withStatus(false, `Minimum order size $${config.minimumOrderSize} `);
+    if (estimatedUsdValue < PERP_MINIMUM_ORDER_SIZE) {
+      return withStatus(false, `Minimum order size $${PERP_MINIMUM_ORDER_SIZE} `);
     }
 
     if (
@@ -848,7 +877,7 @@ function PerpTradeBox({
     isTrailingMode,
     slPercentage,
     isReEntrance,
-    reEntrancePercentage,
+    reEntranceLimit,
     gridNumber,
     gridDistance,
     gridMultiplier,
@@ -871,6 +900,8 @@ function PerpTradeBox({
     tpPercentage,
     isActiveStopLoss,
     slippage,
+    isPairTrading,
+    pairIsReady,
   ]);
 
   // ─── No effect needed for readyToSubmit; we set it in useMemo ──────
@@ -911,6 +942,83 @@ function PerpTradeBox({
     setCreationPending(true);
 
     try {
+      // ── Pair Trading submission ─────────────────────────────────────────
+      if (isPairTrading && pairConfig) {
+        const buildLegParams = (leg: PairTradingConfig["trend" | "counterTrend"], legName: string) => ({
+          gridNumber: 1,
+          targetPrice: leg.entryPrice || liveTokenPriceUsd || tokenInfo?.priceUsd || "0",
+          activeStopLoss: leg.isActiveStopLoss,
+          entryLogic: leg.technicalEntry && !((leg.technicalEntry as any).targetWeight) ? leg.technicalEntry : null,
+          entryWeight: leg.technicalEntry && (leg.technicalEntry as any).targetWeight ? leg.technicalEntry : null,
+          entryType: leg.technicalEntry ? ((leg.technicalEntry as any).targetWeight ? "weight" : "logic") : "price",
+          mode: orderMode,
+          orderSizeMultiplier: 1,
+          initialOrderSize: leg.initialOrderSize,
+          gridMultiplier: 1,
+          gridDistance: 1,
+          collateralToken,
+          outputToken,
+          orderToken: tokenInfo,
+          priority,
+          executionSpeed,
+          orderName,
+          strategy: "pairTrading",
+          chainId,
+          isTrailingMode: leg.isTrailingMode,
+          tpPrice: "",
+          tpPercentage: leg.tpPercentage,
+          slPercentage: leg.slPercentage,
+          isReEntrance: leg.isReEntrance,
+          reEntranceLimit: leg.reEntranceLimit,
+          slippage: leg.slippage,
+          leverage: leg.leverage,
+          isLong: leg.isLong,
+          protocol,
+          // Use address for matching; fall back to symbol for string-keyed exchanges (Hyperliquid)
+          indexTokenAddress: tokenInfo?.symbol || normalizeCoin(tokenInfo?.address),
+          feeToken: isFeeExempt ? null : feeToken,
+          orderLabel: legName,
+        });
+
+        // ── Always regenerate estOrders fresh at submit time ──────────────
+        // Relying on leg.estOrders from state is unsafe: React's async
+        // batching means the estOrders useEffect in PairTradingPanel may
+        // not have fired yet after areWalletsReady changed, leaving
+        // pairConfig.counterTrend.estOrders as [] even when the form is ready.
+        const trendLegParams = buildLegParams(pairConfig.trend, "trend");
+        const ctLegParams = buildLegParams(pairConfig.counterTrend, "counterTrend");
+        const freshTrendEst = configurePerpOrderRef.current(trendLegParams);
+        const freshCtEst = configurePerpOrderRef.current(ctLegParams);
+
+        const [trendResult, ctResult] = await Promise.all([
+          submitOrderRef.current({
+            orderParams: trendLegParams,
+            gridsByWallet: pairConfig.trend.gridsByWallet,
+            estOrders: freshTrendEst,
+            areWalletsReady: pairConfig.trend.areWalletsReady,
+            category: "perpetual",
+            user,
+          }),
+          submitOrderRef.current({
+            orderParams: ctLegParams,
+            gridsByWallet: pairConfig.counterTrend.gridsByWallet,
+            estOrders: freshCtEst,
+            areWalletsReady: pairConfig.counterTrend.areWalletsReady,
+            category: "perpetual",
+            user,
+          }),
+        ]);
+
+        if (trendResult.added === true && ctResult.added === true) {
+          setOrderName("");
+          setIsOrderNameValidate(false);
+          setIsConfirmationOpen(false);
+          setPairConfig(null);
+        }
+        return;
+
+      }
+
       const entryType = getEntryType(technicalEntry);
       const orderParams = {
         gridNumber,
@@ -937,7 +1045,7 @@ function PerpTradeBox({
         tpPercentage,
         slPercentage,
         isReEntrance,
-        reEntrancePercentage,
+        reEntranceLimit,
         slippage,
         leverage,
         isLong,
@@ -992,7 +1100,7 @@ function PerpTradeBox({
     tpPercentage,
     slPercentage,
     isReEntrance,
-    reEntrancePercentage,
+    reEntranceLimit,
     slippage,
     leverage,
     orderMode,
@@ -1003,6 +1111,9 @@ function PerpTradeBox({
     estOrders,
     areWalletsReady,
     user,
+    pairConfig,
+    liveTokenPriceUsd,
+    isFeeExempt,
   ]);
 
   // ========================================================================
@@ -1070,7 +1181,7 @@ function PerpTradeBox({
         tpPercentage,
         slPercentage,
         isReEntrance,
-        reEntrancePercentage,
+        reEntranceLimit,
         slippage,
         leverage,
         isLong,
@@ -1101,7 +1212,7 @@ function PerpTradeBox({
     orderSizeMultiplier,
     isTrailingMode,
     isReEntrance,
-    reEntrancePercentage,
+    reEntranceLimit,
     tpPercentage,
     slPercentage,
     orderMode,
@@ -1145,6 +1256,7 @@ function PerpTradeBox({
         onPerpTradeGateChange={setPerpAccountGateOk}
         isFeeExempt={isFeeExempt}
         orderTradeFee={config.orderTradeFee || 10}
+        indexToken={tokenInfo}
       />
     ),
     [
@@ -1160,6 +1272,7 @@ function PerpTradeBox({
       gridsByWallet,
       areWalletsReady,
       showFeeTokenSelector,
+      tokenInfo,
     ],
   );
 
@@ -1263,205 +1376,19 @@ function PerpTradeBox({
         )}
       </div>
 
-      <div className="w-full grow overflow-y-auto space-y-2 scrollbar-track-transparent [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-gray-200 dark:[&::-webkit-scrollbar-track]:bg-gray-600 [&::-webkit-scrollbar-thumb]:bg-white dark:[&::-webkit-scrollbar-thumb]:bg-gray-800 [&::-webkit-scrollbar-thumb]:rounded-full">
-        <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
-          <div className="flex items-center justify-between">
-            <div className="space-y-1">
-              <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
-                Perp Settings
-              </h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Configure future order settings
-              </p>
-            </div>
-            {/* Order Mode Selector */}
+      <div className="w-full grow overflow-y-auto space-y-2 ">
 
-            <OrderModeSelector orderMode={orderMode} setOrderMode={setOrderMode} isSpot={false} isSupporteduser={showModeSelector} />
-
+        {/* ── Mode selector row — shared by all strategies ─── */}
+        <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800 flex items-center justify-between">
+          <div className="space-y-0.5">
+            <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-sm">Order Mode</h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">Live / Testnet / Demo</p>
           </div>
-
-          <div className="mb-2 md:mb-4">
-            <div className="bg-gray-50 dark:bg-gray-800 p-1 sm:p-1.5 rounded-xl flex gap-1 sm:gap-2 shadow-sm">
-              <button
-                className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200
-            ${isLong
-                    ? "bg-green-500 text-white shadow-lg scale-[1.02] hover:bg-green-600"
-                    : "text-gray-600 hover:bg-gray-100/80"
-                  }`}
-                onClick={() => setIsLong(true)}
-              >
-                Long Position
-              </button>
-              <button
-                className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200
-            ${isLong === false
-                    ? "bg-red-500 text-white shadow-lg scale-[1.02] hover:bg-red-600"
-                    : "text-gray-600 hover:bg-gray-100/80"
-                  }`}
-                onClick={() => setIsLong(false)}
-              >
-                Short Position
-              </button>
-            </div>
-          </div>
-
-          <LeverageInput
-            leverage={leverage}
-            onLeverageChange={setLeverage}
-            maxLeverage={resolvedMaxLeverage}
-          />
-
-          <div className="grid xl:grid-cols-2 gap-4">
-            <div className="space-y-1 md:space-y-2">
-              <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-                Margin Type
-                <InfoTooltip
-                  id={`MarginType-tooltip`}
-                  content={"Order Margin type"}
-                />
-              </label>
-              <div className="flex gap-2 font-bold text-md">ISOLATED</div>
-            </div>
-            <div className="space-y-1 md:space-y-2">
-              <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-                Position Mode
-                <InfoTooltip
-                  id={`PositionMode-tooltip`}
-                  content={"Order Margin type"}
-                />
-              </label>
-              <div className="flex gap-2 font-bold text-md">ONE WAY</div>
-            </div>
-          </div>
-          {estLiquidationPriceUsd != null &&
-            estLiquidationPriceUsd > 0 &&
-            entryForLiquidationUsd > 0 && (
-              <div className="mt-3 p-3 rounded-lg border border-amber-200/80 dark:border-amber-700/50 bg-amber-50/80 dark:bg-amber-900/20">
-                <div className="text-xs font-medium text-amber-900 dark:text-amber-200">
-                  Est. liquidation (isolated, maint. {EST_PERP_MAINTENANCE_BPS}{" "}
-                  bps): $
-                  {displayNumber(estLiquidationPriceUsd)}
-                </div>
-              </div>
-            )}
+          <OrderModeSelector orderMode={orderMode} setOrderMode={setOrderMode} isSpot={false} isSupporteduser={showModeSelector} />
         </div>
 
-        <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
-          <div className="space-y-1 md:space-y-2">
-            <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
-              Initial Setup
-            </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Configure your base trading parameters
-            </p>
-          </div>
-
-          {selectedStrategy.id != "sellToken" && (
-            <div>
-              {selectedStrategy.id === "algo" ? (
-                <TechnicalEntry
-                  technicalEntries={technicalEntry}
-                  setTechnicalEntries={setTechnicalEntry}
-                  title={"Technical Entry condition"}
-                  isPerp={true}
-                  isAdvancedSymbol={isAdvancedSymbol}
-                />
-              ) : (
-                <EntryPriceRendering
-                  setEntryPrice={setEntryPrice}
-                  label={"Entry Price"}
-                  tooltipText={"Price at which to enter the position"}
-                  tokenInfo={tokenInfo}
-                  currentPriceUsd={liveTokenPriceUsd}
-                />
-              )}
-            </div>
-          )}
-
-          <div className="space-y-1 md:space-y-2">
-            <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-              {Number(gridNumber) > 1 && orderSizeMultiplier > 1 && "Initial"} Order Size
-              <InfoTooltip
-                id="order-size-tooltip"
-                content="The initial size of your order"
-              />
-            </label>
-            <div className="relative">
-              <div
-                className={`relative flex focus-within:ring-2 focus-within:ring-blue-500 focus-within:rounded-lg bg-white dark:bg-gray-800 px-1 border ${user?.status !== "admin" &&
-                  initialOrderSize &&
-                  estimatedUsdValue < config.minimumOrderSize
-                  ? "border-red-200 dark:border-red-700"
-                  : "border-gray-200 dark:border-gray-700"
-                  } rounded-lg`}
-              >
-                <input
-                  type="number"
-                  min="0"
-                  onWheel={(e: any) => e.target.blur()}
-                  value={initialOrderSize}
-                  onChange={(e) => handleOrderSize(e.target.value)}
-                  className="w-full placeholder:text-sm px-3 md:px-4 py-2 md:py-3 transition-all outline-none rounded-r-none border-r-0 bg-transparent text-gray-900 dark:text-white"
-                  placeholder="Enter Amount"
-                />
-                <div className="relative flex items-center pr-1">
-                  <div className="flex items-center gap-1 text-gray-900 dark:text-gray-200 px-2">
-                    <img
-                      src={collateralToken.imageUrl}
-                      className="w-4 h-4 rounded-full"
-                      alt={collateralToken.symbol}
-                    />
-                    <span>{collateralToken.symbol}</span>
-                  </div>
-                </div>
-              </div>
-
-              {initialOrderSize && (
-                <div
-                  className={`mt-1 text-xs text-right px-1 ${estimatedUsdValue < config.minimumOrderSize
-                    ? "text-red-500 font-medium"
-                    : "text-gray-500 dark:text-gray-400"
-                    }`}
-                >
-                  {estimatedUsdValue < config.minimumOrderSize && (
-                    <span className="mr-2">Min. order ${config.minimumOrderSize} USD</span>
-                  )}
-                  ≈ $
-                  {estimatedUsdValue.toLocaleString(undefined, {
-                    minimumFractionDigits: 2,
-                    maximumFractionDigits: 2,
-                  })}
-                </div>
-              )}
-            </div>
-
-            {qtyValidationError && (
-              <div className="flex items-start gap-2 mt-1.5 px-3 py-2 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-lg">
-                <FiAlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-                <span className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
-                  {qtyValidationError}
-                </span>
-              </div>
-            )}
-
-            {showFeeTokenSelector && feeToken && (
-              <div className="space-y-1 md:space-y-2 mt-2">
-                <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-                  Fee Token
-                  <InfoTooltip
-                    id="fee-token-tooltip"
-                    content="Pulse fee will be collected in this token."
-                  />
-                </label>
-                <DropDown
-                  options={feeTokenDropdownOptions}
-                  onChange={setFeeToken}
-                  value={feeToken}
-                />
-              </div>
-            )}
-          </div>
-
+        {/* ── Order Name — shared by all strategies ─── */}
+        <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800">
           <OrderNameValidationInput
             name={orderName}
             onChange={setOrderName}
@@ -1471,133 +1398,356 @@ function PerpTradeBox({
           />
         </div>
 
-        {!["limit", "scalp", "algo"].includes(selectedStrategy.id) && (
-          <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
-            <div className="space-y-1 md:space-y-2">
-              <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
-                Grid Configuration
-              </h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Configure your grid trading parameters
-              </p>
+        {/* ── PAIR TRADING PATH ─── */}
+        {isPairTrading ? (
+          <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800">
+            <PairTradingPanel
+              tokenInfo={tokenInfo}
+              chainId={chainId}
+              isConnected={isConnected}
+              user={user}
+              userWallets={userWallets}
+              userPrevOrders={userPrevOrders}
+              protocol={protocol}
+              isAdvancedSymbol={isAdvancedSymbol}
+              collateralToken={collateralToken}
+              liveTokenPriceUsd={liveTokenPriceUsd}
+              orderMode={orderMode}
+              orderName={orderName}
+              isFeeExempt={isFeeExempt}
+              feeToken={showFeeTokenSelector ? feeToken : undefined}
+              config={config}
+              setEstOrders={setEstOrders}
+              onConfigChange={handlePairConfigChange}
+            />
+          </div>
+        ) : (
+          <>
+            <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
+                    Perp Settings
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Configure future order settings
+                  </p>
+                </div>
+              </div>
+
+
+              <div className="mb-2 md:mb-4">
+                <div className="bg-gray-50 dark:bg-gray-800 p-1 sm:p-1.5 rounded-xl flex gap-1 sm:gap-2 shadow-sm">
+                  <button
+                    className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200
+            ${isLong
+                        ? "bg-green-500 text-white shadow-lg scale-[1.02] hover:bg-green-600"
+                        : "text-gray-600 hover:bg-gray-100/80"
+                      }`}
+                    onClick={() => setIsLong(true)}
+                  >
+                    Long Position
+                  </button>
+                  <button
+                    className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200
+            ${isLong === false
+                        ? "bg-red-500 text-white shadow-lg scale-[1.02] hover:bg-red-600"
+                        : "text-gray-600 hover:bg-gray-100/80"
+                      }`}
+                    onClick={() => setIsLong(false)}
+                  >
+                    Short Position
+                  </button>
+                </div>
+              </div>
+
+              <LeverageInput
+                leverage={leverage}
+                onLeverageChange={setLeverage}
+                maxLeverage={resolvedMaxLeverage}
+              />
+
+              <div className="grid xl:grid-cols-2 gap-4">
+                <div className="space-y-1 md:space-y-2">
+                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
+                    Margin Type
+                    <InfoTooltip
+                      id={`MarginType-tooltip`}
+                      content={"Order Margin type"}
+                    />
+                  </label>
+                  <div className="flex gap-2 font-bold text-md">ISOLATED</div>
+                </div>
+                <div className="space-y-1 md:space-y-2">
+                  <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
+                    Position Mode
+                    <InfoTooltip
+                      id={`PositionMode-tooltip`}
+                      content={"Order Margin type"}
+                    />
+                  </label>
+                  <div className="flex gap-2 font-bold text-md">ONE WAY</div>
+                </div>
+              </div>
+              {estLiquidationPriceUsd != null &&
+                estLiquidationPriceUsd > 0 &&
+                entryForLiquidationUsd > 0 && (
+                  <div className="mt-3 p-3 rounded-lg border border-amber-200/80 dark:border-amber-700/50 bg-amber-50/80 dark:bg-amber-900/20">
+                    <div className="text-xs font-medium text-amber-900 dark:text-amber-200">
+                      Est. liquidation (isolated, maint. {EST_PERP_MAINTENANCE_BPS}{" "}
+                      bps): $
+                      {displayNumber(estLiquidationPriceUsd)}
+                    </div>
+                  </div>
+                )}
             </div>
 
-            <div className="grid xl:grid-cols-2 gap-2">
-              <GridInput
-                gridValue={gridNumber}
-                onChange={setGridNumber}
-                user={user}
-                maxGridNumber={config.maxGridNumber}
-              />
-              <NumberInput
-                inputLabel="Grid Distance"
-                toolTipMessage="Percentage distance between each grid level"
-                value={gridDistance}
-                onChange={setGridDistance}
-                notValid={Number(gridNumber) > 1 && (gridDistance === 0 || !gridDistance)}
-              />
+            <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
+              <div className="space-y-1 md:space-y-2">
+                <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
+                  Initial Setup
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Configure your base trading parameters
+                </p>
+              </div>
+
+              {selectedStrategy.id != "sellToken" && (
+                <div>
+                  {selectedStrategy.id === "algo" ? (
+                    <TechnicalEntry
+                      technicalEntries={technicalEntry}
+                      setTechnicalEntries={setTechnicalEntry}
+                      title={"Technical Entry condition"}
+                      isPerp={true}
+                      isAdvancedSymbol={isAdvancedSymbol}
+                    />
+                  ) : (
+                    <EntryPriceRendering
+                      setEntryPrice={setEntryPrice}
+                      label={"Entry Price"}
+                      tooltipText={"Price at which to enter the position"}
+                      tokenInfo={tokenInfo}
+                      currentPriceUsd={liveTokenPriceUsd}
+                    />
+                  )}
+                </div>
+              )}
+
+              <div className="space-y-1 md:space-y-2">
+                <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
+                  {Number(gridNumber) > 1 && orderSizeMultiplier > 1 && "Initial"} Order Size
+                  <InfoTooltip
+                    id="order-size-tooltip"
+                    content="The initial size of your order"
+                  />
+                </label>
+                <div className="relative">
+                  <div
+                    className={`relative flex focus-within:ring-2 focus-within:ring-blue-500 focus-within:rounded-lg bg-white dark:bg-gray-800 px-1 border ${user?.status !== "admin" &&
+                      initialOrderSize &&
+                      estimatedUsdValue < PERP_MINIMUM_ORDER_SIZE
+                      ? "border-red-200 dark:border-red-700"
+                      : "border-gray-200 dark:border-gray-700"
+                      } rounded-lg`}
+                  >
+                    <input
+                      type="number"
+                      min="0"
+                      onWheel={(e: any) => e.target.blur()}
+                      value={initialOrderSize}
+                      onChange={(e) => handleOrderSize(e.target.value)}
+                      className="w-full placeholder:text-sm px-3 md:px-4 py-2 md:py-3 transition-all outline-none rounded-r-none border-r-0 bg-transparent text-gray-900 dark:text-white"
+                      placeholder="Enter Amount"
+                    />
+                    <div className="relative flex items-center pr-1">
+                      <div className="flex items-center gap-1 text-gray-900 dark:text-gray-200 px-2">
+                        <img
+                          src={collateralToken.imageUrl}
+                          className="w-4 h-4 rounded-full"
+                          alt={collateralToken.symbol}
+                        />
+                        <span>{collateralToken.symbol}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {initialOrderSize && (
+                    <div
+                      className={`mt-1 text-xs text-right px-1 ${estimatedUsdValue < PERP_MINIMUM_ORDER_SIZE
+                        ? "text-red-500 font-medium"
+                        : "text-gray-500 dark:text-gray-400"
+                        }`}
+                    >
+                      {estimatedUsdValue < PERP_MINIMUM_ORDER_SIZE && (
+                        <span className="mr-2">Min. order ${PERP_MINIMUM_ORDER_SIZE} USD</span>
+                      )}
+                      ≈ $
+                      {estimatedUsdValue.toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {qtyValidationError && (
+                  <div className="flex items-start gap-2 mt-1.5 px-3 py-2 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-lg">
+                    <FiAlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                    <span className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+                      {qtyValidationError}
+                    </span>
+                  </div>
+                )}
+
+                {showFeeTokenSelector && feeToken && (
+                  <div className="space-y-1 md:space-y-2 mt-2">
+                    <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
+                      Fee Token
+                      <InfoTooltip
+                        id="fee-token-tooltip"
+                        content="Pulse fee will be collected in this token."
+                      />
+                    </label>
+                    <DropDown
+                      options={feeTokenDropdownOptions}
+                      onChange={setFeeToken}
+                      value={feeToken}
+                    />
+                  </div>
+                )}
+              </div>
             </div>
-            {selectedStrategy.id != "dca" && (
-              <div className="grid xl:grid-cols-2 gap-4">
-                <NumberInput
-                  inputLabel="Grid Multiplier"
-                  toolTipMessage="Multiplier for increasing grid size at each level"
-                  value={gridMultiplier}
-                  onChange={setGridMultiplier}
-                  notValid={Number(gridNumber) > 1 && (gridMultiplier === 0 || !gridMultiplier)}
-                />
-                <NumberInput
-                  inputLabel="Collateral Multiplier"
-                  toolTipMessage="Multiplier for increasing collateral at each grid level"
-                  value={orderSizeMultiplier}
-                  onChange={setOrderSizeMultiplier}
-                  notValid={Number(gridNumber) > 1 && (orderSizeMultiplier === 0 || !orderSizeMultiplier)}
-                />
+
+            {!["limit", "scalp", "algo"].includes(selectedStrategy.id) && (
+              <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
+                <div className="space-y-1 md:space-y-2">
+                  <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
+                    Grid Configuration
+                  </h3>
+                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                    Configure your grid trading parameters
+                  </p>
+                </div>
+
+                <div className="grid xl:grid-cols-2 gap-2">
+                  <GridInput
+                    gridValue={gridNumber}
+                    onChange={setGridNumber}
+                    user={user}
+                    maxGridNumber={config.maxGridNumber}
+                  />
+                  <NumberInput
+                    inputLabel="Grid Distance"
+                    toolTipMessage="Percentage distance between each grid level"
+                    value={gridDistance}
+                    onChange={setGridDistance}
+                    notValid={Number(gridNumber) > 1 && (gridDistance === 0 || !gridDistance)}
+                  />
+                </div>
+                {selectedStrategy.id != "dca" && (
+                  <div className="grid xl:grid-cols-2 gap-4">
+                    <NumberInput
+                      inputLabel="Grid Multiplier"
+                      toolTipMessage="Multiplier for increasing grid size at each level"
+                      value={gridMultiplier}
+                      onChange={setGridMultiplier}
+                      notValid={Number(gridNumber) > 1 && (gridMultiplier === 0 || !gridMultiplier)}
+                    />
+                    <NumberInput
+                      inputLabel="Collateral Multiplier"
+                      toolTipMessage="Multiplier for increasing collateral at each grid level"
+                      value={orderSizeMultiplier}
+                      onChange={setOrderSizeMultiplier}
+                      notValid={Number(gridNumber) > 1 && (orderSizeMultiplier === 0 || !orderSizeMultiplier)}
+                    />
+                  </div>
+                )}
               </div>
             )}
-          </div>
-        )}
 
-        <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
-          <div className="space-y-1 md:space-y-2">
-            <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
-              Risk Management
-            </h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Configure your risk management parameters
-            </p>
-          </div>
+            <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
+              <div className="space-y-1 md:space-y-2">
+                <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-lg">
+                  Risk Management
+                </h3>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Configure your risk management parameters
+                </p>
+              </div>
 
-          {selectedStrategy.id != "sellToken" && (
-            <TakeProfitInput
-              takeProfitPercentage={tpPercentage}
-              onTakeProfitPercentageChange={setTpPercentage}
-              isTrailingMode={isTrailingMode}
-              handleTrailingMode={handleTrailingMode}
-              initialOrderSize={initialOrderSize}
-              collateralToken={collateralToken}
-              trailingMode={true}
-            />
-          )}
+              {selectedStrategy.id != "sellToken" && (
+                <TakeProfitInput
+                  takeProfitPercentage={tpPercentage}
+                  onTakeProfitPercentageChange={setTpPercentage}
+                  isTrailingMode={isTrailingMode}
+                  handleTrailingMode={handleTrailingMode}
+                  initialOrderSize={initialOrderSize}
+                  collateralToken={collateralToken}
+                  trailingMode={true}
+                />
+              )}
 
-          {selectedStrategy.id != "sellToken" && (
-            <StopLossInput
-              isActive={isActiveStopLoss}
-              setIsActive={setIsActiveStopLoss}
-              isTrailingMode={isTrailingMode}
-              stopLossPercentage={slPercentage}
-              setStopLossPercentage={setSlPercentage}
-              notValid={isTrailingMode && slPercentage === 0}
-            />
-          )}
+              {selectedStrategy.id != "sellToken" && (
+                <StopLossInput
+                  isActive={isActiveStopLoss}
+                  setIsActive={setIsActiveStopLoss}
+                  isTrailingMode={isTrailingMode}
+                  stopLossPercentage={slPercentage}
+                  setStopLossPercentage={setSlPercentage}
+                  notValid={isTrailingMode && slPercentage === 0}
+                />
+              )}
 
-          {selectedStrategy.id == "sellToken" && (
-            <EntryPriceRendering
-              setEntryPrice={setTpPrice}
-              label={"Exit Price"}
-              tooltipText={"Price at which to exit the position"}
-              tokenInfo={tokenInfo}
-              currentPriceUsd={liveTokenPriceUsd}
-            />
-          )}
+              {selectedStrategy.id == "sellToken" && (
+                <EntryPriceRendering
+                  setEntryPrice={setTpPrice}
+                  label={"Exit Price"}
+                  tooltipText={"Price at which to exit the position"}
+                  tokenInfo={tokenInfo}
+                  currentPriceUsd={liveTokenPriceUsd}
+                />
+              )}
 
-          <SlippageInput slippage={slippage} onChange={setSlippage} />
+              <SlippageInput slippage={slippage} onChange={setSlippage} />
 
-          {selectedStrategy.id != "sellToken" && (
-            <ReEntranceInput
-              isReEntrance={isReEntrance}
-              setIsReEntrance={setIsReEntrance}
-              reEntrancePercentage={reEntrancePercentage}
-              setReEntrancePercentage={setReEntrancePercentage}
-            />
-          )}
+              {selectedStrategy.id != "sellToken" && (
+                <ReEntranceInput
+                  isReEntrance={isReEntrance}
+                  setIsReEntrance={setIsReEntrance}
+                  reEntranceLimit={reEntranceLimit}
+                  setReEntranceLimit={setReEntranceLimit}
+                />
+              )}
 
-          <div className="space-y-1 md:space-y-2">
-            <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-              Output Token
-              <InfoTooltip
-                id="output-token-tooltip"
-                content="The token you'll receive when closing positions"
-              />
-            </label>
-            <div className="relative">
-              <DropDown
-                options={chainCollateralOptions}
-                onChange={setOutputToken}
-                value={outputToken}
-              />
+              <div className="space-y-1 md:space-y-2">
+                <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
+                  Output Token
+                  <InfoTooltip
+                    id="output-token-tooltip"
+                    content="The token you'll receive when closing positions"
+                  />
+                </label>
+                <div className="relative">
+                  <DropDown
+                    options={chainCollateralOptions}
+                    onChange={setOutputToken}
+                    value={outputToken}
+                  />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
 
-        <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
-          {estOrders.length > 0 && user?.account && MemoizedWalletSelector}
-        </div>
+            <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
+              {estOrders.length > 0 && user?.account && MemoizedWalletSelector}
+            </div>
+          </>
+        )}
       </div>
 
       {isConnected == false ? (
         <div className="flex gap-0.5 items-center">
-          {estOrders.length > 0 && (
+          {!isPairTrading && estOrders.length > 0 && (
             <button
               className="w-8 py-3 md:py-4 rounded-s-xl bg-blue-500 font-bold text-white transition-all transform hover:scale-[1.02] flex justify-center items-center cursor-pointer"
               onClick={() => setOpenEstimatedOrderModal(true)}
@@ -1606,7 +1756,7 @@ function PerpTradeBox({
             </button>
           )}
           <button
-            className={`grow py-3 md:py-4 ${estOrders.length > 0 ? "rounded-e-xl" : "rounded-xl"
+            className={`grow py-3 md:py-4 ${!isPairTrading && estOrders.length > 0 ? "rounded-e-xl" : "rounded-xl"
               } bg-gray-50 dark:bg-gray-900 font-bold text-black dark:text-white transition-all transform hover:scale-[1.02] cursor-pointer`}
           >
             Connect Wallet
@@ -1614,7 +1764,7 @@ function PerpTradeBox({
         </div>
       ) : (
         <div className="flex gap-0.5 items-center">
-          {estOrders.length > 0 && (
+          {!isPairTrading && estOrders.length > 0 && (
             <button
               className="w-8 py-3 md:py-4 rounded-s-xl bg-blue-500 font-bold text-white transition-all transform hover:scale-[1.02] flex justify-center items-center cursor-pointer"
               onClick={() => setOpenEstimatedOrderModal(true)}
@@ -1624,17 +1774,15 @@ function PerpTradeBox({
           )}
           <button
             disabled={
-              !areWalletsReady ||
-              estOrders.length === 0 ||
               creationPending ||
-              !readyToSubmitOrder
+              !readyToSubmitOrder ||
+              (isPairTrading ? false : (!areWalletsReady || estOrders.length === 0))
             }
             onClick={() => setIsConfirmationOpen(true)}
-            className={`grow py-3 md:py-4 ${estOrders.length > 0 ? "rounded-e-xl" : "rounded-xl"
-              } ${!areWalletsReady ||
-                estOrders.length === 0 ||
-                creationPending ||
-                !readyToSubmitOrder
+            className={`grow py-3 md:py-4 ${!isPairTrading && estOrders.length > 0 ? "rounded-e-xl" : "rounded-xl"
+              } ${creationPending ||
+                !readyToSubmitOrder ||
+                (isPairTrading ? false : (!areWalletsReady || estOrders.length === 0))
                 ? "bg-blue-200 dark:bg-blue-900/30 pointer-events-none opacity-50"
                 : "bg-blue-500 hover:bg-blue-600"
               } font-bold text-gray-800 dark:text-gray-50 transition-all transform hover:scale-[1.02] cursor-pointer`}
@@ -1643,6 +1791,7 @@ function PerpTradeBox({
           </button>
         </div>
       )}
+
 
       {openEstOrderModal && estOrders.length > 0 && (
         <EstSpotOrders

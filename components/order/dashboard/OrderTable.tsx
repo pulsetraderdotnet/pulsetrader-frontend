@@ -142,7 +142,7 @@ const OrderTableRow = memo(
 
     // ─── Exit Display (TP / SL) ─────────────────────────────────────
     const exitDisplay = useMemo(() => {
-      const { exit } = order;
+      const { exit, reEntrance } = order;
       if (!exit) return <span className="text-gray-400 text-xs">—</span>;
 
       const tp = exit.takeProfit;
@@ -150,6 +150,10 @@ const OrderTableRow = memo(
 
       const trailingLabel = exit.isTrailingMode ? (
         <span className="text-[9px] font-bold text-blue-500 uppercase">Trailing</span>
+      ) : null;
+
+      const reEntranceLabel = reEntrance?.isReEntrance ? (
+        <span className="text-[9px] font-bold text-blue-500 uppercase">ReEntrance ({reEntrance?.rePlay || 0} / {reEntrance?.reEntranceLimit})</span>
       ) : null;
 
       return (
@@ -185,8 +189,10 @@ const OrderTableRow = memo(
               SL: {sl?.stopLossPctBps ? `${sl.stopLossPctBps / 100}%` : "—"}
             </div>
           ) : null}
-
-          {trailingLabel && <div>{trailingLabel}</div>}
+          <div className="flex gap-1 items-center">
+            {trailingLabel && <div>{trailingLabel}</div>}
+            {reEntranceLabel && <div>{reEntranceLabel}</div>}
+          </div>
         </div>
       );
     }, [order.exit]);
@@ -242,7 +248,7 @@ const OrderTableRow = memo(
                   {order.perp.isLong ? "LONG" : "SHORT"}
                 </span>
               )}
-              {asset?.symbol || "UNK"}
+              {order?.orderAsset?.orderToken?.symbol || "UNK"}
             </div>
             <div className="flex items-center gap-1">
               <div className="flex items-center gap-1 text-xs text-gray-500">

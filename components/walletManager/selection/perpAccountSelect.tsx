@@ -44,6 +44,7 @@ import {
   SINGLE_PERPETUAL_STRATEGY,
   ORDER_FEE_COLLECTION_GAS_FEE,
 } from "@/constants/common/order";
+import type { StableMarketTokenInfo } from "@/type/market";
 
 // ─── Types ──────────────────────────────────────────────────────────────
 type Order = OrderType & { sl: number; _id?: string; wallet?: WalletType };
@@ -86,6 +87,7 @@ interface WalletSelectorProps {
   onPerpTradeGateChange?: (canSubmit: boolean) => void;
   isFeeExempt: boolean;
   orderTradeFee: number;
+  indexToken: StableMarketTokenInfo
 }
 
 
@@ -767,6 +769,7 @@ const WalletSelector = ({
   perpBalancesByWallet,
   isFeeExempt,
   orderTradeFee,
+  indexToken,
   onPerpTradeGateChange,
 }: WalletSelectorProps) => {
   const [showWalletSelector, setShowWalletSelector] = useState(false);
@@ -1202,11 +1205,12 @@ const WalletSelector = ({
     () =>
       filteredAvailableWallets
         .filter((wallet) => !selectedWallets.some((sw) => sw._id === wallet._id))
+        .filter((wallet) => !orders.filter(o => o.category === "perpetual" && o.indexTokenAddress == indexToken.symbol && o.isActive && ["PENDING", "PROCESSING", "OPENED"].includes(o.orderStatus) && o.orderMode == orderMode).map(o => o.wallet._id).includes(wallet._id))
         .map((wallet) => ({
           wallet,
           data: walletDataMap[wallet.address.toLowerCase()],
         })),
-    [filteredAvailableWallets, selectedWallets, walletDataMap]
+    [filteredAvailableWallets, selectedWallets, walletDataMap, loadingWallets]
   );
 
   return (

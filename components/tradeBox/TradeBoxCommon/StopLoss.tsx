@@ -8,6 +8,7 @@ interface StopLossInputProps {
   stopLossPercentage: number;
   setStopLossPercentage: (value: number) => void;
   notValid: boolean;
+  additionalLabel?: string;
 }
 
 const StopLossInput = ({
@@ -17,6 +18,7 @@ const StopLossInput = ({
   stopLossPercentage,
   setStopLossPercentage,
   notValid,
+  additionalLabel
 }: StopLossInputProps) => {
   const [inputValue, setInputValue] = useState(String(stopLossPercentage));
   const inputRef = useRef<HTMLInputElement>(null);
@@ -58,7 +60,7 @@ const StopLossInput = ({
     <div className="space-y-3 p-3 bg-gray-100 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
       <div className="flex items-center justify-between">
         <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-          {isTrailingMode && "Trailing"} Stop Loss
+          {isTrailingMode && "Trailing"} {additionalLabel ?? 'Stop Loss'}
           <InfoTooltip
             id="sl-tooltip"
             content={

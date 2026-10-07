@@ -22,7 +22,7 @@ import { useStore } from "@/store/useStore";
 import { useShallow } from "zustand/shallow";
 
 import RenderTokenFundingModal from "@/components/walletManager/modal/PulseWalletFundingModal";
-
+import ChainSelection from "../navbar/chainSelection";
 import { formatPrice, formatCompactNumber } from "@/utility/handy";
 
 
@@ -34,9 +34,10 @@ export default function TokenExplorer({
 }: {
   handleTradeNow: (tokenAddress: string) => void;
 }) {
-  const { network, user } = useStore(
+  const { network, setNetwork, user } = useStore(
     useShallow((state: any) => ({
       network: state.network,
+      setNetwork: state.setNetwork,
       user: state.user,
     })),
   );
@@ -192,6 +193,7 @@ export default function TokenExplorer({
             </div>
 
             {/* Filter Toggle */}
+            <ChainSelection selectChain={network} setSelectChain={setNetwork} pathName='' />
             <button
               onClick={() => setShowFilters(!showFilters)}
               className={`p-2.5 rounded-xl border transition-all flex items-center gap-2 text-sm font-bold ${showFilters
@@ -382,8 +384,9 @@ export default function TokenExplorer({
                   ? [...Array(10)].map((_, i) => <SkeletonRow key={i} />)
                   : tokens.map((token: any) => (
                     <tr
+                      onClick={() => handleTradeNow(token.token.address)}
                       key={token.token.address} // Use unique address as key
-                      className="hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors group"
+                      className="hover:bg-blue-50/50 dark:hover:bg-white/[0.02] transition-colors group cursor-pointer"
                     >
                       {/* Token Identity */}
                       <td className="py-4 px-6">
@@ -504,8 +507,9 @@ export default function TokenExplorer({
         <div className="md:hidden space-y-3">
           {tokens.map((token: any) => (
             <div
+              onClick={() => handleTradeNow(token.token.address)}
               key={token.token.address} // Use unique address as key
-              className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-white/5 rounded-2xl p-4 shadow-sm active:scale-[0.99] transition-transform"
+              className="bg-white dark:bg-[#161b22] border border-gray-200 dark:border-white/5 rounded-2xl p-4 shadow-sm active:scale-[0.99] transition-transform cursor-pointer"
             >
               <div className="flex justify-between items-start mb-3">
                 <div className="flex items-center gap-3">

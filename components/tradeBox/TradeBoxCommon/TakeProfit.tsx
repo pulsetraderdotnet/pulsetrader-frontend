@@ -9,6 +9,7 @@ interface TakeProfitInputProps {
   initialOrderSize: string;
   collateralToken: any;
   trailingMode: boolean;
+  additionalLabel?: string
 }
 
 const TakeProfitInput = ({
@@ -19,6 +20,7 @@ const TakeProfitInput = ({
   initialOrderSize,
   collateralToken,
   trailingMode,
+  additionalLabel
 }: TakeProfitInputProps) => {
   const [inputValue, setInputValue] = useState(String(takeProfitPercentage));
   const inputRef = useRef<HTMLInputElement>(null);
@@ -67,7 +69,7 @@ const TakeProfitInput = ({
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-          {isTrailingMode && "Trailing"} Take Profit
+          {isTrailingMode ? "Trailing" : ""} {additionalLabel ?? 'Take Profit'}
           <InfoTooltip
             id="tp-tooltip"
             content="Percentage profit target to close position"

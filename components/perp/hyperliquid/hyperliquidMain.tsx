@@ -32,7 +32,7 @@ import type { OrderType } from "@/type/order";
 import ChartBox from "./ChartBox";
 import { normalizeCoin, normalizeHyperLiquidSymbol } from "@/utility/perpUtils";
 
-interface DEFINED_PERP_MAIN_PROPS {
+interface HYPERLIQUID_MAIN_PROPS {
   tokenSymbol: string;
 }
 
@@ -240,7 +240,7 @@ TradeButton.displayName = "TradeButton";
 
 // ─── Main Component ──────────────────────────────────────────────────────
 
-export default function DefinedPerpMain({ tokenSymbol }: DEFINED_PERP_MAIN_PROPS) {
+export default function HyperliquidMain({ tokenSymbol }: HYPERLIQUID_MAIN_PROPS) {
   const { user, isConnected, network, userOrders, userWallets, systemInfo } = useStore(
     useShallow((state) => {
       const typedState = state as {
@@ -339,7 +339,7 @@ export default function DefinedPerpMain({ tokenSymbol }: DEFINED_PERP_MAIN_PROPS
   // ── Viewport handling ──────────────────────────────────────────────────
   useEffect(() => {
     const handleViewport = () => {
-      setIsDesktop(window.innerWidth >= 1024);
+      setIsDesktop(window.innerWidth >= 1300);
     };
 
     handleViewport();

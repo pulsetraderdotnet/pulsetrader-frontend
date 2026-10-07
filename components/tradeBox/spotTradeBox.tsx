@@ -137,7 +137,7 @@ function SpotTradeBox({
 
   const [isTrailingMode, setIsTrailingMode] = useState<boolean>(false);
   const [isReEntrance, setIsReEntrance] = useState<boolean>(false);
-  const [reEntrancePercentage, setReEntrancePercentage] = useState<number>(1);
+  const [reEntranceLimit, setReEntranceLimit] = useState<number>(10);
 
   // Advanced Settings State
   const [priority, setPriority] = useState<number>(2);
@@ -381,7 +381,7 @@ function SpotTradeBox({
       tpPercentage,
       slPercentage,
       isReEntrance,
-      reEntrancePercentage,
+      reEntranceLimit,
       slippage,
       feeToken,
       collateralPrice,
@@ -402,7 +402,7 @@ function SpotTradeBox({
     orderSizeMultiplier,
     isTrailingMode,
     isReEntrance,
-    reEntrancePercentage,
+    reEntranceLimit,
     tpPercentage,
     slPercentage,
     orderMode,
@@ -457,7 +457,7 @@ function SpotTradeBox({
       return withStatus(false, "Stop loss required in trailing mode");
     }
 
-    if (isReEntrance && (reEntrancePercentage <= 0 || reEntrancePercentage.toString() === "")) {
+    if (isReEntrance && (reEntranceLimit <= 0 || reEntranceLimit.toString() === "")) {
       return withStatus(false, "Set re-entrance % in re-entrance mode");
     }
 
@@ -523,7 +523,7 @@ function SpotTradeBox({
     isTrailingMode,
     slPercentage,
     isReEntrance,
-    reEntrancePercentage,
+    reEntranceLimit,
     gridNumber,
     gridDistance,
     gridMultiplier,
@@ -597,7 +597,7 @@ function SpotTradeBox({
         tpPercentage,
         slPercentage,
         isReEntrance,
-        reEntrancePercentage,
+        reEntranceLimit,
         slippage,
         indexTokenAddress: tokenInfo.address,
         feeToken,
@@ -649,7 +649,7 @@ function SpotTradeBox({
     tpPercentage,
     slPercentage,
     isReEntrance,
-    reEntrancePercentage,
+    reEntranceLimit,
     slippage,
     feeToken,
     submitOrder,
@@ -909,7 +909,7 @@ function SpotTradeBox({
       </div>
 
       {/* Scrollable Form Section */}
-      <div className="w-full grow overflow-y-auto space-y-2 scrollbar-track-transparent [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-gray-200 dark:[&::-webkit-scrollbar-track]:bg-gray-600 [&::-webkit-scrollbar-thumb]:bg-white dark:[&::-webkit-scrollbar-thumb]:bg-gray-800 [&::-webkit-scrollbar-thumb]:rounded-full">
+      <div className="w-full grow overflow-y-auto space-y-2 ">
         {/* Initial Setup */}
         <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-6 rounded-xl space-y-3 md:space-y-4 border border-gray-100 dark:border-gray-800">
           <div className="flex items-center justify-between">
@@ -1149,8 +1149,8 @@ function SpotTradeBox({
             <ReEntranceInput
               isReEntrance={isReEntrance}
               setIsReEntrance={setIsReEntrance}
-              reEntrancePercentage={reEntrancePercentage}
-              setReEntrancePercentage={setReEntrancePercentage}
+              reEntranceLimit={reEntranceLimit}
+              setReEntranceLimit={setReEntranceLimit}
             />
           )}
 

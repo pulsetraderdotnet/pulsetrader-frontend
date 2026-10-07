@@ -288,27 +288,30 @@ const OrderList = ({
   // ─── Not connected ─────────────────────────────────────────────
   if (!isConnected) {
     return (
-      <div className="w-full h-full min-h-0 flex items-center justify-center p-4">
-        <div className="p-10 rounded-2xl border border-gray-200/50 dark:border-white/[0.05] bg-white/70 dark:bg-white/[0.02] backdrop-blur-sm flex flex-col items-center justify-center text-center max-w-md">
-          <div className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-4">
-            <BiWallet className="w-7 h-7 text-blue-400" />
+      <div className="w-full h-full min-h-0 flex flex-col rounded-2xl border border-gray-200/50 dark:border-white/[0.06] bg-white/80 dark:bg-[#0a0c10]/90 backdrop-blur-sm overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto flex items-center justify-center p-4">
+          <div className="w-full max-w-sm p-6 sm:p-8 rounded-2xl border border-gray-200/50 dark:border-white/[0.05] bg-white/70 dark:bg-white/[0.02] backdrop-blur-sm flex flex-col items-center justify-center text-center">
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center mb-3">
+              <BiWallet className="w-6 h-6 text-blue-400" />
+            </div>
+            <h3 className="text-sm font-bold text-gray-900 dark:text-white mb-1">
+              Connect Your Wallet
+            </h3>
+            <p className="text-gray-500 dark:text-slate-400 mb-4 text-xs max-w-xs leading-relaxed">
+              Connect your wallet to view and manage your orders.
+            </p>
+            <Link href="/connect">
+              <motion.button
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+                className="flex items-center gap-2 px-5 py-2 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white font-bold rounded-xl text-xs shadow-lg shadow-blue-500/25 transition-all group"
+              >
+                <BiWallet className="w-3.5 h-3.5" />
+                Connect Wallet
+                <FiArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+              </motion.button>
+            </Link>
           </div>
-          <h3 className="text-base font-bold text-gray-900 dark:text-white mb-1">
-            Connect Your Wallet
-          </h3>
-          <p className="text-gray-500 dark:text-slate-400 mb-5 text-sm max-w-xs">
-            Please connect your wallet to view and manage your orders.
-          </p>
-          <Link href="/connect">
-            <motion.button
-              whileHover={{ scale: 1.03 }}
-              whileTap={{ scale: 0.97 }}
-              className="flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-blue-600 to-violet-600 hover:from-blue-500 hover:to-violet-500 text-white font-bold rounded-xl text-sm shadow-lg shadow-blue-500/25 transition-all group"
-            >
-              <BiWallet className="w-4 h-4" /> Connect Wallet
-              <FiArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
-            </motion.button>
-          </Link>
         </div>
       </div>
     );
@@ -326,8 +329,8 @@ const OrderList = ({
               <button
                 onClick={() => setViewMode("orders")}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${viewMode === "orders"
-                    ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
                   }`}
               >
                 <FiList className="w-3.5 h-3.5" />
@@ -336,8 +339,8 @@ const OrderList = ({
               <button
                 onClick={() => setViewMode("terminal")}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${viewMode === "terminal"
-                    ? "bg-white dark:bg-white/10 text-emerald-600 dark:text-emerald-400 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+                  ? "bg-white dark:bg-white/10 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
                   }`}
               >
                 <FiTerminal className="w-3.5 h-3.5" />
@@ -367,8 +370,8 @@ const OrderList = ({
                   onClick={() => setIsTableOrder(false)}
                   title="Group View"
                   className={`p-1.5 rounded-lg transition-all duration-200 ${!isTableOrder
-                      ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
-                      : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
+                    : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                     }`}
                 >
                   <CiGrid41 className="w-4 h-4" />
@@ -378,8 +381,8 @@ const OrderList = ({
                   onClick={() => setIsTableOrder(true)}
                   title="Table View"
                   className={`p-1.5 rounded-lg transition-all duration-200 ${isTableOrder
-                      ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
-                      : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    ? "bg-white dark:bg-white/10 text-blue-600 dark:text-blue-400 shadow-sm"
+                    : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                     }`}
                 >
                   <CiGrid2H className="w-4 h-4" />
@@ -392,8 +395,8 @@ const OrderList = ({
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowChartDisplayFilter(!showChartDisplayFilter)}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-all ${showChartDisplayFilter || chartDisplayMode !== "none"
-                  ? "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
-                  : "bg-white/60 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
+                ? "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
+                : "bg-white/60 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
                 }`}
             >
               <LuChartCandlestick className="w-3.5 h-3.5" />
@@ -408,8 +411,8 @@ const OrderList = ({
               whileTap={{ scale: 0.95 }}
               onClick={() => setShowFilters(!showFilters)}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border transition-all ${showFilters || hasActiveFilters
-                  ? "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
-                  : "bg-white/60 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
+                ? "bg-blue-500/10 border-blue-500/30 text-blue-500 dark:text-blue-400"
+                : "bg-white/60 dark:bg-white/[0.04] border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
                 }`}
             >
               <FiFilter className="w-3.5 h-3.5" />
@@ -454,8 +457,8 @@ const OrderList = ({
                       key={mode}
                       onClick={() => handleChartModeSelect(mode)}
                       className={`px-3 py-1.5 text-xs font-semibold rounded-lg capitalize transition-all ${chartDisplayMode === mode
-                          ? "bg-blue-600 text-white shadow shadow-blue-500/30"
-                          : "bg-white dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
+                        ? "bg-blue-600 text-white shadow shadow-blue-500/30"
+                        : "bg-white dark:bg-white/[0.05] border border-gray-200/50 dark:border-white/[0.06] text-gray-600 dark:text-gray-400 hover:border-blue-400/30"
                         }`}
                     >
                       {mode}

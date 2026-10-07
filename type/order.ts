@@ -140,6 +140,7 @@ export type OrderType = {
   // Re‑entrance
   reEntrance: {
     isReEntrance: boolean;              // default: false
+    rePlay: number;
     reEntranceLimit: number;            // default: 0
   };
 
@@ -198,6 +199,7 @@ export type OrderType = {
 
   // Additional metadata
   additional: {
+    orderLabel?: "trend" | "counterTrend" | string;
     priority: number;                   // default: 1
     executionSpeed: string;             // default: 'standard'
     retry: number;                      // default: 0

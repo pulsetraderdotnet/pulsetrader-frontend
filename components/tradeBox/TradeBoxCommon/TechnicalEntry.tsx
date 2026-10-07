@@ -262,11 +262,21 @@ const LogicNode = React.memo<LogicNodeProps>(
             </div>
             <div>
               <label className="text-[10px] text-gray-400 mb-0.5 block">Threshold</label>
+              {/* FIXED: Threshold input NaN handling */}
               <input
                 type="number"
                 className="w-full px-2 py-1 text-xs rounded bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                value={node.value}
-                onChange={(e) => handleFieldChange("value", parseFloat(e.target.value))}
+                value={
+                  node.value === undefined ||
+                    node.value === null ||
+                    (typeof node.value === "number" && isNaN(node.value))
+                    ? ""
+                    : node.value
+                }
+                onChange={(e) => {
+                  const val = e.target.value;
+                  handleFieldChange("value", val === "" ? "" : parseFloat(val));
+                }}
               />
             </div>
           </div>
@@ -290,11 +300,22 @@ const LogicNode = React.memo<LogicNodeProps>(
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-400 mb-0.5 block">Period</label>
+                  {/* FIXED: Period input NaN handling */}
                   <input
                     type="number"
                     className="w-full px-2 py-1 text-xs rounded bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                    value={node.period || 14}
-                    onChange={(e) => handleFieldChange("period", parseFloat(e.target.value))}
+                    value={
+                      node.period === undefined ||
+                        node.period === null ||
+                        (typeof node.period === "number" && isNaN(node.period))
+                        ? ""
+                        : node.period
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      // Use NaN instead of "" to satisfy strict number typing while allowing UI clearing
+                      handleFieldChange("period", val === "" ? NaN : parseFloat(val));
+                    }}
                   />
                 </div>
               </div>
@@ -309,8 +330,8 @@ const LogicNode = React.memo<LogicNodeProps>(
       return (
         <div
           className={`rounded-lg p-3 border-l-4 ${node.operator === "AND"
-              ? "border-l-blue-400 bg-blue-50/50 dark:bg-blue-900/10"
-              : "border-l-orange-400 bg-orange-50/50 dark:bg-orange-900/10"
+            ? "border-l-blue-400 bg-blue-50/50 dark:bg-blue-900/10"
+            : "border-l-orange-400 bg-orange-50/50 dark:bg-orange-900/10"
             } border-y border-r border-gray-200 dark:border-gray-700 ${depth > 0 ? "mt-2" : ""}`}
         >
           <div className="flex items-center justify-between mb-3">
@@ -320,8 +341,8 @@ const LogicNode = React.memo<LogicNodeProps>(
               </span>
               <select
                 className={`px-2 py-0.5 text-xs font-bold rounded border ${node.operator === "AND"
-                    ? "text-blue-600 border-blue-200 bg-blue-100"
-                    : "text-orange-600 border-orange-200 bg-orange-100"
+                  ? "text-blue-600 border-blue-200 bg-blue-100"
+                  : "text-orange-600 border-orange-200 bg-orange-100"
                   } focus:outline-none cursor-pointer`}
                 value={node.operator}
                 onChange={handleGroupOperatorChange}
@@ -441,11 +462,21 @@ const WeightedLogic = ({ weights, onChange, metricsList }: WeightedLogicProps) =
         <label className="text-[10px] text-gray-400 mb-1.5 block font-bold uppercase tracking-wider">
           Target Weight to Trigger Order
         </label>
+        {/* FIXED: Target Weight NaN handling */}
         <input
           type="number"
           className="w-full px-3 py-2 text-sm rounded bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-1 focus:ring-blue-500 outline-none text-black dark:text-white font-bold"
-          value={weights.targetWeight}
-          onChange={(e) => handleTargetWeightChange(parseInt(e.target.value) || 0)}
+          value={
+            weights.targetWeight === undefined ||
+              weights.targetWeight === null ||
+              (typeof weights.targetWeight === "number" && isNaN(weights.targetWeight))
+              ? ""
+              : weights.targetWeight
+          }
+          onChange={(e) => {
+            const val = e.target.value;
+            handleTargetWeightChange(val === "" ? NaN : parseInt(val));
+          }}
         />
       </div>
 
@@ -501,11 +532,21 @@ const WeightedLogic = ({ weights, onChange, metricsList }: WeightedLogicProps) =
                 </div>
                 <div>
                   <label className="text-[10px] text-gray-400 mb-0.5 block">Period</label>
+                  {/* FIXED: Weighted Period NaN handling */}
                   <input
                     type="number"
                     className="w-full px-2 py-1.5 text-xs rounded bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                    value={w.period || 14}
-                    onChange={(e) => handleWeightChange(idx, "period", parseFloat(e.target.value) || 14)}
+                    value={
+                      w.period === undefined ||
+                        w.period === null ||
+                        (typeof w.period === "number" && isNaN(w.period))
+                        ? ""
+                        : w.period
+                    }
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      handleWeightChange(idx, "period", val === "" ? NaN : parseFloat(val));
+                    }}
                   />
                 </div>
               </div>
@@ -537,11 +578,21 @@ const WeightedLogic = ({ weights, onChange, metricsList }: WeightedLogicProps) =
               </div>
               <div>
                 <label className="text-[10px] text-gray-400 mb-0.5 block">Weight</label>
+                {/* FIXED: Weight NaN handling */}
                 <input
                   type="number"
                   className="w-full px-2 py-1.5 text-xs rounded bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 focus:ring-1 focus:ring-blue-500 outline-none"
-                  value={w.weight}
-                  onChange={(e) => handleWeightChange(idx, "weight", parseInt(e.target.value) || 0)}
+                  value={
+                    w.weight === undefined ||
+                      w.weight === null ||
+                      (typeof w.weight === "number" && isNaN(w.weight))
+                      ? ""
+                      : w.weight
+                  }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    handleWeightChange(idx, "weight", val === "" ? NaN : parseInt(val));
+                  }}
                 />
               </div>
             </div>

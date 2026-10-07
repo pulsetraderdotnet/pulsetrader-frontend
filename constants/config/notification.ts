@@ -157,9 +157,9 @@ export const NOTIFICATION_CONFIG: Record<
     title: "Order Closing Failed",
     message: "Failed to close this order. Please try again.",
   },
-  ORDER_CLOSE_SUCCESS: {
-    title: "Order Closed Successfully",
-    message: "The order was closed successfully.",
+  ORDER_CLOSE_PROCEED: {
+    title: "Order Proceed for Close",
+    message: "Order close is proceeding.",
   },
 
 
