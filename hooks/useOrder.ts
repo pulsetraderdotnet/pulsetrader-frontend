@@ -416,7 +416,6 @@ export const useOrder = () => {
     user: any;
   }) => {
     let orderAddResult = { added: false, error: null as string | null };
-    console.log(estOrders)
     try {
       if (estOrders.length === 0 || !areWalletsReady) {
         notifyFromApiError("INVALID_EST_ORDERS");

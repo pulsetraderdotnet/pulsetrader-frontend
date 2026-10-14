@@ -26,7 +26,7 @@ export const store = create((set) => ({
         advancedAlgoPerpSymbols: ["BTC"],
         minimumOrderSize: 5,
         maxGridNumber: 3,
-        perpMinimumUsdcDeposit: 10,
+        minimumPerpDeposit: 10000000,
         perpDepositToken: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
         perpDepositChain: 42161,
         orderTradeFee: 10,
@@ -36,3 +36,4 @@ export const store = create((set) => ({
 }))
 
 export const useStore = store;
+

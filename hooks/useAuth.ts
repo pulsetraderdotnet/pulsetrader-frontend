@@ -644,7 +644,16 @@ export const useUserAuth = () => {
         return;
       }
       updateNetworkConfig(apiResponse.data.chainConfigs)
-      setSystemInfo(apiResponse.data);
+      setSystemInfo({
+        advancedAlgoPerpSymbols: apiResponse.data.advancedAlgoPerpSymbols,
+        minimumOrderSize: apiResponse.data.minimumOrderSize,
+        minimumPerpDeposit: apiResponse.data.minimumPerpDeposit,
+        maxGridNumber: apiResponse.data.maxGridNumber,
+        userLevels: apiResponse.data.userLevels,
+        orderTradeFee: apiResponse.data.orderTradeFee,
+        perpDepositToken: apiResponse.data.perpDepositToken,
+        perpDepositChain: apiResponse.data.perpDepositChain,
+      });
     } catch (error: any) {
       const key = handleServerErrorToast({ err: error });
       notifyFromApiError(key);

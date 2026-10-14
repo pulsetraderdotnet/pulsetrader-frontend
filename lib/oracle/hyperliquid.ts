@@ -92,7 +92,7 @@ export const getHyperLiquidCandles = async ({
   const fromTimestampMili = Math.floor(from * 1000);
   const toTimestampMil = Math.floor(to * 1000);
 
-  const interval = resolutionIntervalMap[resolution] || "1h";
+  const interval = resolutionIntervalMap[resolution] || resolution || "1h";
   for (const urlCfg of HYPERLIQUID_API_URLS) {
     try {
       const data = await nativeFetchRequest({

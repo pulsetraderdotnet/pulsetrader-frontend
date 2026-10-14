@@ -44,7 +44,7 @@ export const ORDER_FEE_COLLECTION_GAS_FEE = {
   [chains.Arbitrum]: BigInt(4500000000000),
 };
 
-export const SINGLE_PERPETUAL_STRATEGY = ['limit', 'dca', 'grid', 'algo'];
+export const SINGLE_PERPETUAL_STRATEGY = ['limit', 'dca', 'grid', 'algo', 'pairTrading'];
 export const SINGLE_SPOT_STRATEGY = ['limit', 'algo'];
 
 

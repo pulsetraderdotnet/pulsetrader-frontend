@@ -10,7 +10,6 @@ export const getHyperliquidAvailableBalance = async (userAddress: string) => {
             user: userAddress,
         },
     });
-    console.log("state", state)
     if (!state) return;
     return parseFloat(state.withdrawable)
 }
@@ -65,7 +64,8 @@ export const getHyperAccountState = async (userAddress: string, isMainnet: boole
 
 
 export const getPerpExchangeAvailableBalance = async (userAddress: string, exchange: string, isMainnet: boolean) => {
-    if (exchange == 'hyperliquid') {
+    if (exchange?.toLowerCase() == 'hyperliquid') {
         return getHyperAccountState(userAddress, isMainnet)
     }
+    return 0;
 }

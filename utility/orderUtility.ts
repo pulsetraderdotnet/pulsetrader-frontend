@@ -38,6 +38,38 @@ export function getGridMultiplierNthValue({
   return (initialValue * numerator) / denominator;
 }
 
+// export function getGridNthPrice({
+//   entryPrice,
+//   gridDistance,
+//   gridMultiplier,
+//   n,
+//   decrement = true,
+// }: {
+//   entryPrice: bigint;
+//   gridDistance: number;
+//   gridMultiplier: number;
+//   n: number;
+//   decrement: boolean;
+// }) {
+//   const bigX = BigInt(Math.round(gridDistance));
+//   const bigY = BigInt(Math.round(gridMultiplier));
+//   const bigN = BigInt(n);
+
+//   if (n === 1) return entryPrice;
+
+//   const rotationFactor = bigY ** (bigN - BigInt(1)) - BigInt(1);
+//   const totalDropPercent = bigX * rotationFactor;
+
+//   const percentagePrice = (entryPrice * totalDropPercent) / BigInt(100);
+//   const Price = decrement
+//     ? entryPrice - percentagePrice
+//     : entryPrice + percentagePrice;
+
+//   return Price;
+// }
+
+const SCALE = BigInt(10_000); // 4 decimal places of precision
+
 export function getGridNthPrice({
   entryPrice,
   gridDistance,
@@ -46,26 +78,41 @@ export function getGridNthPrice({
   decrement = true,
 }: {
   entryPrice: bigint;
-  gridDistance: number;
-  gridMultiplier: number;
+  gridDistance: number;      // in percent, e.g. 10 = 10%
+  gridMultiplier: number;    // 1, 2, etc.
   n: number;
   decrement: boolean;
-}) {
-  const bigX = BigInt(Math.round(gridDistance));
-  const bigY = BigInt(Math.round(gridMultiplier));
-  const bigN = BigInt(n);
+}): bigint {
+  if (n <= 1) return entryPrice;
 
-  if (n === 1) return entryPrice;
+  // Scale inputs to avoid floating-point errors
+  const distanceScaled = BigInt(Math.round(gridDistance * Number(SCALE)));
+  const multiplierScaled = BigInt(Math.round(gridMultiplier * Number(SCALE)));
 
-  const rotationFactor = bigY ** (bigN - BigInt(1)) - BigInt(1);
-  const totalDropPercent = bigX * rotationFactor;
+  if (multiplierScaled === SCALE) {
+    // ── Multiplier = 1 : geometric compounding on previous price ──
+    // factor = 1 - gridDistance/100
+    const factor = SCALE - (distanceScaled / BigInt(100));
+    let price = entryPrice;
+    for (let i = 1; i < n; i++) {
+      price = (price * factor) / SCALE;
+    }
+    return price;
+  } else {
+    // ── Multiplier > 1 : cumulative drop on entry price ──
+    // totalDropPercent = gridDistance * (multiplier^(n-1) - 1)
+    const power = BigInt(n - 1);
+    const multiplierPow = multiplierScaled ** power;
+    const scalePow = SCALE ** power;
 
-  const percentagePrice = (entryPrice * totalDropPercent) / BigInt(100);
-  const Price = decrement
-    ? entryPrice - percentagePrice
-    : entryPrice + percentagePrice;
+    // offset = entry * gridDistance * (multiplier^(n-1) - 1) / 100
+    // (all scaled to bigint)
+    const numerator = entryPrice * distanceScaled * (multiplierPow - scalePow);
+    const denominator = BigInt(100) * SCALE * scalePow;
+    const offset = numerator / denominator;
 
-  return Price;
+    return decrement ? entryPrice - offset : entryPrice + offset;
+  }
 }
 
 export function calculateEstLiquidationPrice(
@@ -172,6 +219,27 @@ export const isStableToken = (token: OrderTokenType | null | undefined): boolean
 export const validateCollateralIsStable = (token: OrderTokenType | null | undefined): boolean => {
   if (!token) return false;
   return isStableToken(token);
+};
+
+// ============================================================================
+// NATIVE TOKEN GUARD
+// ============================================================================
+
+/**
+ * Treat a token as native when:
+ *  - its address is ZeroAddress, OR
+ *  - the backend flagged it as native / wrapped-native, OR
+ *  - the address is missing entirely (common for native tokens in API payloads)
+ */
+export const isNativeToken = (
+  token: OrderTokenType | null | undefined
+): boolean => {
+  if (!token) return false;
+  if (token.isNative === true) return true;
+  if (token.isWrappedNative === true) return true;
+  const addr = (token.address || "").toLowerCase();
+  if (!addr) return true;
+  return addr === ZeroAddress.toLowerCase();
 };
 
 // ============================================================================
@@ -323,7 +391,11 @@ export const getOrderCosts = ({
   user,
   treatCollateralTokenAsWalletBalance,
   isFeeExempt,
-  orderTradeFee
+  orderTradeFee,
+  // When true, the caller already knows `collateralTokenAddress` is the
+  // order's own lock token (BUY → collateral, SELL → orderToken). Skips the
+  // equality check so missing/empty addresses don't silently drop the lock.
+  forceOrderCollateralMatch = false,
 }: {
   order: OrderType;
   collateralTokenAddress: string;
@@ -331,7 +403,8 @@ export const getOrderCosts = ({
   user: any;
   treatCollateralTokenAsWalletBalance: boolean;
   isFeeExempt: boolean;
-  orderTradeFee: number
+  orderTradeFee: number;
+  forceOrderCollateralMatch?: boolean;
 }): OrderCosts => {
   const orderAsset = order.orderAsset;
   const feeToken = orderAsset?.feeToken;
@@ -339,7 +412,9 @@ export const getOrderCosts = ({
 
   let orderGasFee = BigInt(0);
   const collateralLower = (collateralTokenAddress || ZeroAddress).toLowerCase();
-  const isNativeCollateral = collateralLower === ZeroAddress.toLowerCase();
+  const isNativeCollateral = forceOrderCollateralMatch
+    ? isNativeToken(orderAsset?.collateralToken)
+    : collateralLower === ZeroAddress.toLowerCase();
 
   let walletOrderAmount = BigInt(0);
   let dexOrderAmount = BigInt(0);
@@ -347,10 +422,15 @@ export const getOrderCosts = ({
   if (order?.category === "spot") {
     const spot = order.spot;
     orderGasFee = GAS_LIMIT["SPOT"][order.chainId] * gasFee;
-    if (order.orderType === "BUY") {
+
+    const orderCollateralAddrLower = (orderAsset?.collateralToken?.address || "").toLowerCase();
+    const orderTokenAddrLower = (orderAsset?.orderToken?.address || "").toLowerCase();
+
+    if (order.orderType === "BUY" && (forceOrderCollateralMatch || collateralLower === orderCollateralAddrLower)) {
       orderGasFee = orderGasFee * BigInt(2);
       walletOrderAmount = toBigIntSafe(spot?.amount?.orderSize);
-    } else {
+    }
+    if (order.orderType === "SELL" && (forceOrderCollateralMatch || collateralLower === orderTokenAddrLower)) {
       walletOrderAmount = toBigIntSafe(spot?.amount?.tokenAmount);
     }
   } else if (order?.category === "perpetual" || order?.category === "futures") {
@@ -360,19 +440,12 @@ export const getOrderCosts = ({
     }
   }
 
-  // Fee exemption check
-
-
   const feeCount = getOrderFeeCollectionCount(order);
-  // For spot orders: pulse fee is deducted from collateral within the same swap TX.
-  // No separate fee token reservation and no extra gas for fee collection needed.
   let feeTokenAmount = BigInt(0);
   if (order?.category === "spot") {
     feeTokenAmount = BigInt(0);
     feeTokenAddress = undefined;
   } else if (!isFeeExempt && feeTokenAddress) {
-    // For perp/futures: read feeToken.amount from the order object (always populated by backend).
-    // If missing for any reason, derive from order size using the trade fee rate.
     feeTokenAmount = toBigIntSafe((feeToken as any)?.amount);
     if (feeTokenAmount === BigInt(0)) {
       const rawOrderAmount = toBigIntSafe(order.perp?.amount?.orderSize);
@@ -385,13 +458,10 @@ export const getOrderCosts = ({
           feeTokenAmount =
             (rawOrderAmount * BigInt(orderTradeFee)) / BASIS_POINT_DIVISOR_BIGINT;
         }
-        // If fee token differs from collateral and amount is missing, fall back to 0.
-        // The backend always populates feeToken.amount so this case should not occur in practice.
       }
     }
   }
 
-  // Legacy override: treat collateral as wallet balance
   if (
     treatCollateralTokenAsWalletBalance &&
     dexOrderAmount > BigInt(0) &&
@@ -401,7 +471,6 @@ export const getOrderCosts = ({
     dexOrderAmount = BigInt(0);
   }
 
-  // Native collateral is always paid from the wallet balance
   if (
     isNativeCollateral &&
     walletOrderAmount === BigInt(0) &&
@@ -421,13 +490,14 @@ export const getOrderCosts = ({
 };
 
 // ============================================================================
-// CALCULATE EXISTING LOCKED FUNDS (UPGRADED)
+// CALCULATE EXISTING LOCKED FUNDS
 // ============================================================================
 
 export type LockedFundsResult = {
   totalActiveOrders: number;
   lockedFundBalance: bigint;              // native gas locked by all existing orders
-  walletCollateralPending: bigint;        // wallet-side collateral locked (spot / native)
+  walletCollateralPending: bigint;        // ERC20 collateral locked (matches passed-in collateralTokenAddress)
+  nativeCollateralPending: bigint;        // native collateral locked (independent of passed-in collateral)
   dexCollateralPending: Record<string, bigint>; // perp margin locked per protocol key
   feeTokenPending: Record<string, bigint>;      // fee token locked per token address (perp only)
 };
@@ -441,21 +511,21 @@ export const calculateExistingLockedFunds = ({
   user,
   treatCollateralTokenAsWalletBalance,
   isFeeExempt,
-  orderTradeFee
+  orderTradeFee,
 }: {
-  orders: OrderType[],
-  walletId: string,
-  collateralTokenAddress: string,
-  gasFee: bigint,
-  orderMode: string,
-  user: any,
-  treatCollateralTokenAsWalletBalance: boolean,
-  isFeeExempt: boolean,
-  orderTradeFee: number
+  orders: OrderType[];
+  walletId: string;
+  collateralTokenAddress: string;
+  gasFee: bigint;
+  orderMode: string;
+  user: any;
+  treatCollateralTokenAsWalletBalance: boolean;
+  isFeeExempt: boolean;
+  orderTradeFee: number;
 }): LockedFundsResult => {
-  // Maps to accumulate results
   const lockedFundBalanceByWallet = new Map<string, bigint>();
   const walletCollateralPendingByWallet = new Map<string, bigint>();
+  const nativeCollateralPendingByWallet = new Map<string, bigint>();
   const dexCollateralPendingByWallet = new Map<string, Record<string, bigint>>();
   const feeTokenPendingByWallet = new Map<string, Record<string, bigint>>();
   const activeCountByWallet = new Map<string, number>();
@@ -472,52 +542,88 @@ export const calculateExistingLockedFunds = ({
     return map;
   };
 
-  // Filter orders for the given wallet and active status
-  // NOTE: all order categories (spot + perp) are intentionally included for
-  // cross-category native balance lock tracking.
+  const passedCollateralLower = (
+    collateralTokenAddress || ZeroAddress
+  ).toLowerCase();
+
   const relevantOrders = (orders || [])
-    .filter(o => o.orderMode === orderMode)
-    .filter(o => {
+    .filter((o) => o.orderMode === orderMode)
+    .filter((o) => {
       const wid = String(o?.wallet?._id ?? o?.wallet ?? "");
       return wid && wid === String(walletId);
     })
-    .filter(o => isActiveClientOrder(o));
+    .filter((o) => isActiveClientOrder(o));
 
-  // Compute costs synchronously for all relevant orders
-  relevantOrders.forEach(order => {
+  relevantOrders.forEach((order) => {
+    const wid = String(order?.wallet?._id ?? order?.wallet ?? "");
+    activeCountByWallet.set(wid, (activeCountByWallet.get(wid) || 0) + 1);
+
+    const isSpot = order.category === "spot";
+    const isSell = order.orderType === "SELL";
+
+    // ✅ The token the wallet must lock:
+    //    - spot BUY  → collateral (what you pay)
+    //    - spot SELL → orderToken (what you give up)
+    //    - perp      → collateral
+    const walletLockToken =
+      isSpot && isSell
+        ? order.orderAsset?.orderToken
+        : order.orderAsset?.collateralToken;
+
+    const walletLockAddr = walletLockToken?.address || ZeroAddress;
+    const walletLockAddrLower = walletLockAddr.toLowerCase();
+    const isWalletLockNative = isNativeToken(walletLockToken);
+
+    // Does this order's wallet-lock matter for the current view?
+    //   - native locks always feed the ETH card
+    //   - ERC20 locks feed only the card whose collateral matches
+    const isRelevantToPassed =
+      isWalletLockNative || walletLockAddrLower === passedCollateralLower;
+
+    // Compute costs unconditionally — gas is native and always accumulates.
     const costs = getOrderCosts({
       order,
-      collateralTokenAddress,
+      collateralTokenAddress: walletLockAddr,
       gasFee,
       user: order?.user ?? user,
       treatCollateralTokenAsWalletBalance,
       isFeeExempt,
-      orderTradeFee
+      orderTradeFee,
+      forceOrderCollateralMatch: true,
     });
 
+    // Native gas — always accumulated regardless of collateral view.
+    lockedFundBalanceByWallet.set(
+      wid,
+      (lockedFundBalanceByWallet.get(wid) || BigInt(0)) + costs.orderGasFee
+    );
 
-    const wid = String(order?.wallet?._id ?? order?.wallet ?? "");
+    if (!isRelevantToPassed) return;
 
-    activeCountByWallet.set(wid, (activeCountByWallet.get(wid) || 0) + 1);
-
-    // Accumulate native gas fees from all order categories
-    const currentGas = lockedFundBalanceByWallet.get(wid) || BigInt(0);
-    lockedFundBalanceByWallet.set(wid, currentGas + costs.orderGasFee);
-
-    // Accumulate wallet collateral (spot / native perp)
+    // Wallet-side collateral — native vs ERC20 split based on the LOCK token,
+    // not the order's collateral.
     if (costs.walletOrderAmount > BigInt(0)) {
-      const current = walletCollateralPendingByWallet.get(wid) || BigInt(0);
-      walletCollateralPendingByWallet.set(wid, current + costs.walletOrderAmount);
+      if (isWalletLockNative) {
+        nativeCollateralPendingByWallet.set(
+          wid,
+          (nativeCollateralPendingByWallet.get(wid) || BigInt(0)) +
+          costs.walletOrderAmount
+        );
+      } else if (walletLockAddrLower === passedCollateralLower) {
+        walletCollateralPendingByWallet.set(
+          wid,
+          (walletCollateralPendingByWallet.get(wid) || BigInt(0)) +
+          costs.walletOrderAmount
+        );
+      }
     }
 
-    // Accumulate dex collateral (perp orders) per protocol
     if (costs.dexOrderAmount > BigInt(0)) {
       const protocolKey = (order?.perp?.protocol || "").toLowerCase();
       const dexMap = ensureDexMap(wid);
       dexMap[protocolKey] = (dexMap[protocolKey] || BigInt(0)) + costs.dexOrderAmount;
     }
 
-    // Accumulate fee token amounts (perp only — spot has no separate fee token)
     if (costs.feeTokenAmount > BigInt(0) && costs.feeTokenAddress) {
       const addr = costs.feeTokenAddress.toLowerCase();
       const feeMap = ensureFeeTokenMap(wid);
@@ -530,6 +636,7 @@ export const calculateExistingLockedFunds = ({
     totalActiveOrders: activeCountByWallet.get(wid) || 0,
     lockedFundBalance: lockedFundBalanceByWallet.get(wid) || BigInt(0),
     walletCollateralPending: walletCollateralPendingByWallet.get(wid) || BigInt(0),
+    nativeCollateralPending: nativeCollateralPendingByWallet.get(wid) || BigInt(0),
     dexCollateralPending: dexCollateralPendingByWallet.get(wid) || {},
     feeTokenPending: feeTokenPendingByWallet.get(wid) || {},
   };

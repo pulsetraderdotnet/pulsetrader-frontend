@@ -6,7 +6,6 @@ import { FiX, FiRefreshCw, FiAlertCircle, FiClock, FiCopy } from "react-icons/fi
 import { RiWallet3Line } from "react-icons/ri";
 import toast from "react-hot-toast";
 import { formatUnits, parseUnits, isAddress } from "ethers";
-import { safeFormatNumber } from "@/utility/handy";
 import { WalletType } from "@/type/common";
 import Service from "@/service/user-service";
 import { PRECISION_DECIMALS } from "@/constants/common/utils";
@@ -18,6 +17,7 @@ interface PerpWithdrawModalProps {
     dex: string;
     currentBalanceUsd: string; // raw balance in wei (scaled by PRECISION_DECIMALS)
     onWithdrawSuccess: () => void;
+    isMainnet?: boolean;
 }
 
 const USDC_DECIMALS = 6;
@@ -29,6 +29,7 @@ export default function PerpWithdrawModal({
     dex,
     currentBalanceUsd,
     onWithdrawSuccess,
+    isMainnet = true,
 }: PerpWithdrawModalProps) {
     const [mounted, setMounted] = useState(false);
     const [amount, setAmount] = useState("");
@@ -93,6 +94,7 @@ export default function PerpWithdrawModal({
                 walletAddress: wallet.address,
                 amount: amount, // Send as decimal string
                 receiver: receiver,
+                isMainnet,
             });
 
             if (res?.success) {
@@ -114,7 +116,7 @@ export default function PerpWithdrawModal({
         } finally {
             setIsLoading(false);
         }
-    }, [canWithdraw, isValidAmount, isValidReceiver, amount, dex, wallet.address, receiver, onWithdrawSuccess, onClose]);
+    }, [canWithdraw, isValidAmount, isValidReceiver, amount, dex, wallet.address, receiver, onWithdrawSuccess, onClose, isMainnet]);
 
     const copyAddress = useCallback(() => {
         if (wallet?.address) {
@@ -148,9 +150,19 @@ export default function PerpWithdrawModal({
                                     <RiWallet3Line size={24} className="text-white" />
                                 </div>
                                 <div>
-                                    <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                                        Withdraw from {dex === "asterdex" ? "Asterdex" : "Hyperliquid"}
-                                    </h2>
+                                    <div className="flex items-center gap-2">
+                                        <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                                            Withdraw from {dex === "asterdex" ? "Asterdex" : "Hyperliquid"}
+                                        </h2>
+                                        <span
+                                            className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${isMainnet
+                                                    ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                                                    : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                                                }`}
+                                        >
+                                            {isMainnet ? "Mainnet" : "Testnet"}
+                                        </span>
+                                    </div>
                                     <p className="text-xs text-gray-500 dark:text-gray-500">
                                         Balance: {balanceUsd.toFixed(2)} USDC
                                     </p>
@@ -248,8 +260,8 @@ export default function PerpWithdrawModal({
                                 disabled={!canWithdraw}
                                 onClick={handleWithdraw}
                                 className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest text-white transition-all bg-gradient-to-r from-red-600 to-rose-500 ${!canWithdraw
-                                        ? "opacity-40 cursor-not-allowed"
-                                        : "hover:shadow-lg shadow-red-500/20"
+                                    ? "opacity-40 cursor-not-allowed"
+                                    : "hover:shadow-lg shadow-red-500/20"
                                     }`}
                             >
                                 {isLoading ? (

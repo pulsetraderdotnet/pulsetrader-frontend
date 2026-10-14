@@ -36,21 +36,31 @@ const TOKEN_OPTIONS: TokenOption[] = [
     chainId: 42161,
     isArbUsdc: true,
   },
-  {
-    symbol: "USDT (Arbitrum)",
-    address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
-    decimals: 6,
-    chainId: 42161,
-    isArbUsdc: false,
-  },
-  {
-    symbol: "ETH (Arbitrum)",
-    address: ZeroAddress,
-    decimals: 18,
-    chainId: 42161,
-    isArbUsdc: false,
-  },
+  // {
+  //   symbol: "USDT (Arbitrum)",
+  //   address: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
+  //   decimals: 6,
+  //   chainId: 42161,
+  //   isArbUsdc: false,
+  // },
+  // {
+  //   symbol: "ETH (Arbitrum)",
+  //   address: ZeroAddress,
+  //   decimals: 18,
+  //   chainId: 42161,
+  //   isArbUsdc: false,
+  // },
 ];
+
+const TESTNET_TOKEN_OPTIONS: TokenOption[] = [
+  {
+    symbol: "USDC (Arbitrum)",
+    address: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
+    decimals: 6,
+    chainId: 421614,
+    isArbUsdc: true,
+  },
+]
 
 // ─── Types ──────────────────────────────────────────────────────────────
 interface TokenOption {
@@ -75,6 +85,7 @@ interface PerpDepositModalProps {
   wallet: WalletType;
   initialDex: string;
   user: UserType;
+  isMainnet?: boolean;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────
@@ -83,7 +94,8 @@ export default function PerpDepositModal({
   onClose,
   wallet,
   initialDex,
-  user
+  user,
+  isMainnet = true,
 }: PerpDepositModalProps) {
   const [mounted, setMounted] = useState(false);
   const [amount, setAmount] = useState("");
@@ -96,18 +108,27 @@ export default function PerpDepositModal({
   const [isQuoting, setIsQuoting] = useState(false);
   const [quoteInfo, setQuoteInfo] = useState<QuoteInfoType | null>(null);
   const [quotedForAmount, setQuotedForAmount] = useState<bigint | null>(null);
-  const [selectedToken, setSelectedToken] = useState<TokenOption>(TOKEN_OPTIONS[0]);
+
+  const tokenOptions = useMemo(() => {
+    return isMainnet ? TOKEN_OPTIONS : TESTNET_TOKEN_OPTIONS;
+  }, [isMainnet]);
+
+  const [selectedToken, setSelectedToken] = useState<TokenOption>(
+    isMainnet ? TOKEN_OPTIONS[0] : TESTNET_TOKEN_OPTIONS[0]
+  );
   const [lockedBalance, setLockedBalance] = useState<bigint>(BigInt(0));
+
+  useEffect(() => {
+    setSelectedToken(isMainnet ? TOKEN_OPTIONS[0] : TESTNET_TOKEN_OPTIONS[0]);
+    setQuoteInfo(null);
+    setQuotedForAmount(null);
+    setAmount("");
+  }, [isMainnet]);
 
   // ─── Refs ──────────────────────────────────────────────────────────────
   const quoteRequestId = useRef(0);
   const balanceRequestId = useRef(0);
   const lastQuotedTokenRef = useRef<string>("");
-
-  const needsSwap = useMemo(
-    () => selectedToken.address.toLowerCase() !== systemInfo?.perpDepositToken?.toLowerCase(),
-    [selectedToken.address]
-  );
 
   const { userOrders, systemInfo } = useStore(
     useShallow((state: any) => ({
@@ -115,6 +136,25 @@ export default function PerpDepositModal({
       systemInfo: state.systemInfo,
     }))
   );
+
+
+  // Resolve the target perp-deposit token once so the memo has a stable dep.
+  const perpDepositTokenAddress = useMemo(
+    () => (systemInfo?.perpDepositToken || "").toLowerCase(),
+    [systemInfo?.perpDepositToken]
+  );
+
+  const needsSwap = useMemo(() => {
+    // 1. Explicit flag on the token option wins — Arbitrum USDC IS the deposit token.
+    if (selectedToken.isArbUsdc) return false;
+
+    // 2. If systemInfo hasn't loaded yet (or doesn't expose a target token),
+    //    be conservative: assume a swap is needed for non-USDC tokens.
+    if (!perpDepositTokenAddress) return true;
+
+    // 3. Otherwise, compare addresses.
+    return selectedToken.address.toLowerCase() !== perpDepositTokenAddress;
+  }, [selectedToken.address, selectedToken.isArbUsdc, perpDepositTokenAddress]);
 
   // ─── Lifecycle ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -138,6 +178,7 @@ export default function PerpDepositModal({
     const requestId = ++balanceRequestId.current;
     setIsBalanceLoading(true);
 
+
     try {
       const [tokenBal, nativeBal] = await Promise.all([
         getEvmBalance({
@@ -155,7 +196,8 @@ export default function PerpDepositModal({
       if (requestId !== balanceRequestId.current) return;
       setWalletBalance(tokenBal);
       setNativeBalance(nativeBal);
-    } catch {
+    } catch (err) {
+      console.log(err)
       if (requestId !== balanceRequestId.current) return;
       setWalletBalance(BigInt(0));
       setNativeBalance(BigInt(0));
@@ -171,7 +213,7 @@ export default function PerpDepositModal({
         orders: userOrders,
         walletId: wallet._id,
         tokenAddress: selectedToken.address,
-        isFeeExempt: isTradeFeeExemptStatus(systemInfo.userLevels, user?.status)
+        isFeeExempt: isTradeFeeExemptStatus(systemInfo.userLevels, user?.status),
       });
       setLockedBalance(locked);
     } else {
@@ -198,7 +240,9 @@ export default function PerpDepositModal({
     }
 
     try {
-      const feeData: any = await getGasFee(Number(systemInfo?.perpDepositChain) || 42161);
+      const feeData: any = await getGasFee(
+        Number(systemInfo?.perpDepositChain) || 42161
+      );
       let gasPrice = BigInt(0);
 
       if (feeData?.gasPrice) {
@@ -213,23 +257,28 @@ export default function PerpDepositModal({
         gasPrice = BigInt(100_000_000); // fallback 0.1 Gwei
       }
 
-      const gasLimit = needsSwap ? SWAP_DEPOSIT_ARB_GAS_LIMIT : USDC_DEPOSIT_ARB_GAS_LIMIT;
+      const gasLimit = needsSwap
+        ? SWAP_DEPOSIT_ARB_GAS_LIMIT
+        : USDC_DEPOSIT_ARB_GAS_LIMIT;
       const cost = gasPrice * BigInt(gasLimit);
       setGasCostEstimate(cost);
     } catch {
       setGasCostEstimate(BigInt(500_000_000_000_000)); // fallback 0.0005 ETH
     }
-  }, [wallet?.address, needsSwap]);
+  }, [wallet?.address, needsSwap, systemInfo?.perpDepositChain]);
 
   useEffect(() => {
     if (isOpen && wallet?.address) {
       estimateGas();
     }
-  }, [isOpen, wallet?.address, needsSwap, estimateGas]);
+  }, [isOpen, wallet?.address, needsSwap, systemInfo?.perpDepositChain, estimateGas]);
 
   // ─── Derived state ──────────────────────────────────────────────
   const availableBalance = useMemo(
-    () => (walletBalance - lockedBalance > 0 ? walletBalance - lockedBalance : BigInt(0)),
+    () =>
+      walletBalance - lockedBalance > 0
+        ? walletBalance - lockedBalance
+        : BigInt(0),
     [walletBalance, lockedBalance]
   );
 
@@ -242,15 +291,20 @@ export default function PerpDepositModal({
     }
   }, [amount, selectedToken.decimals]);
 
-  const minimumUsdcDeposit = safeParseUnits(systemInfo?.perpMinimumUsdcDeposit, 6) || BigInt(10000000); // 10 USDC
+  const minimumUsdcDeposit = BigInt(
+    systemInfo?.minimumPerpDeposit || 6_000_000
+  ); // 6 USDC (matches backend PER_MINIMUM_USDC_DEPOSIT)
   const isBelowMinimum =
     selectedToken.isArbUsdc &&
     parsedAmount !== null &&
     parsedAmount < minimumUsdcDeposit;
 
   // When depositing native token (ETH), we need to account for gas fees in the balance check.
-  const isInsufficientBalance = parsedAmount !== null &&
-    ((selectedToken.address === ZeroAddress ? parsedAmount + gasCostEstimate : parsedAmount) > availableBalance);
+  const isInsufficientBalance =
+    parsedAmount !== null &&
+    (selectedToken.address === ZeroAddress
+      ? parsedAmount + gasCostEstimate
+      : parsedAmount) > availableBalance;
 
   const isInsufficientNative = useMemo(() => {
     if (gasCostEstimate === BigInt(0)) return false;
@@ -268,7 +322,10 @@ export default function PerpDepositModal({
 
   // ─── Quote logic ──────────────────────────────────────────────
   const handleQuote = useCallback(
-    async (amountToQuote: bigint | null, { silent = false }: { silent?: boolean } = {}) => {
+    async (
+      amountToQuote: bigint | null,
+      { silent = false }: { silent?: boolean } = {}
+    ) => {
       if (!amountToQuote) {
         if (!silent) toast.error("Enter a valid amount");
         return;
@@ -307,7 +364,10 @@ export default function PerpDepositModal({
 
           if (isBelowMin) {
             toast.error(
-              `Estimated USDC output (${formatUnits(amountOut, 6)}) is below the minimum of ${formatUnits(
+              `Estimated USDC output (${formatUnits(
+                amountOut,
+                6
+              )}) is below the minimum of ${formatUnits(
                 minimumUsdcDeposit,
                 6
               )} USDC`
@@ -365,7 +425,8 @@ export default function PerpDepositModal({
 
   // ─── Deposit submission ──────────────────────────────────────────
   const handleApiDeposit = async () => {
-    if (!amount || Number(amount) <= 0) return toast.error("Enter a valid amount");
+    if (!amount || Number(amount) <= 0)
+      return toast.error("Enter a valid amount");
     if (!parsedAmount) return toast.error("Invalid amount");
 
     // Validate balance
@@ -375,7 +436,10 @@ export default function PerpDepositModal({
     }
     if (isInsufficientNative) {
       toast.error(
-        `Insufficient ETH for gas fees. Need at least ${formatUnits(gasCostEstimate, 18)} ETH.`
+        `Insufficient ETH for gas fees. Need at least ${formatUnits(
+          gasCostEstimate,
+          18
+        )} ETH.`
       );
       return;
     }
@@ -392,7 +456,9 @@ export default function PerpDepositModal({
         return;
       }
       if (isQuoteStale) {
-        toast.error("The amount changed since your last quote — please re-quote before depositing.");
+        toast.error(
+          "The amount changed since your last quote — please re-quote before depositing."
+        );
         return;
       }
     }
@@ -406,11 +472,15 @@ export default function PerpDepositModal({
         tokenAddress: selectedToken.address,
         chainId: selectedToken.chainId,
         decimals: selectedToken.decimals,
+        isMainnet,
       });
 
       if (res?.success || res?.data?.success) {
         const notice = res?.data?.notice || res?.data?.data?.notice || "";
-        toast.success(`Deposited to ${selectedDex} successfully!${notice ? ` ${notice}` : ""}`);
+        toast.success(
+          `Deposited to ${selectedDex} successfully!${notice ? ` ${notice}` : ""
+          }`
+        );
         onClose();
         setAmount("");
         setQuoteInfo(null);
@@ -418,7 +488,9 @@ export default function PerpDepositModal({
       } else {
         const msg = res?.data?.message || res?.message || "Deposit failed";
         if (msg === "MINIMUM_DEPOSIT_REQUIRED") {
-          toast.error(`Minimum deposit is ${formatUnits(minimumUsdcDeposit, 6)} USDC`);
+          toast.error(
+            `Minimum deposit is ${formatUnits(minimumUsdcDeposit, 6)} USDC`
+          );
         } else {
           notifyFromApiError(msg);
         }
@@ -432,7 +504,13 @@ export default function PerpDepositModal({
 
   // ─── Can deposit? ────────────────────────────────────────────────
   const canDeposit = useMemo(() => {
-    if (!parsedAmount || isBelowMinimum || isInsufficientBalance || isLoading || isQuoting)
+    if (
+      !parsedAmount ||
+      isBelowMinimum ||
+      isInsufficientBalance ||
+      isLoading ||
+      isQuoting
+    )
       return false;
     if (isInsufficientNative) return false;
     if (needsSwap && isQuoteStale) return false;
@@ -451,7 +529,9 @@ export default function PerpDepositModal({
   ]);
 
   // ─── Handlers ────────────────────────────────────────────────────
-  const handleInputDepositAmount = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleInputDepositAmount = (
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const { value } = e.target;
     if (value !== "" && Number(value) < 0) return;
     setAmount(value);
@@ -462,7 +542,7 @@ export default function PerpDepositModal({
   };
 
   const handleTokenChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const token = TOKEN_OPTIONS.find((t) => t.address === e.target.value);
+    const token = tokenOptions.find((t) => t.address === e.target.value);
     if (token) {
       setSelectedToken(token);
       setQuoteInfo(null);
@@ -511,9 +591,20 @@ export default function PerpDepositModal({
             {/* Header */}
             <div className="p-6 border-b border-gray-100 dark:border-white/5 flex items-center justify-between sticky top-0 bg-white/80 dark:bg-[#0d1117]/90 backdrop-blur-sm z-10">
               <div>
-                <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                  Deposit to {selectedDex === "asterdex" ? "Asterdex" : "Hyperliquid"}
-                </h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-gray-900 dark:text-white">
+                    Deposit to{" "}
+                    {selectedDex === "asterdex" ? "Asterdex" : "Hyperliquid"}
+                  </h2>
+                  <span
+                    className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${isMainnet
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                      : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                      }`}
+                  >
+                    {isMainnet ? "Mainnet" : "Testnet"}
+                  </span>
+                </div>
                 <p className="text-[10px] uppercase tracking-widest font-bold text-gray-500 dark:text-gray-500 mt-1">
                   Minimum {formatUnits(minimumUsdcDeposit, 6)} USDC
                 </p>
@@ -563,7 +654,7 @@ export default function PerpDepositModal({
                   onChange={handleTokenChange}
                   className="w-full bg-white dark:bg-black/40 border border-gray-200 dark:border-white/10 rounded-xl p-3 text-gray-900 dark:text-white outline-none text-sm focus:border-blue-500 transition-colors"
                 >
-                  {TOKEN_OPTIONS.map((t) => (
+                  {tokenOptions.map((t) => (
                     <option key={t.address} value={t.address}>
                       {t.symbol}
                     </option>
@@ -579,7 +670,8 @@ export default function PerpDepositModal({
                     <div className="flex items-center gap-1.5">
                       <span>Locked:</span>
                       <span className="text-red-500 dark:text-red-400 normal-case">
-                        {formatCompactNumber(displayLocked, 4)} {selectedToken.symbol.split(" ")[0]}
+                        {formatCompactNumber(displayLocked, 4)}{" "}
+                        {selectedToken.symbol.split(" ")[0]}
                       </span>
                     </div>
                     <button
@@ -597,7 +689,8 @@ export default function PerpDepositModal({
                         </span>
                       ) : (
                         <span className="text-emerald-600 dark:text-emerald-400 normal-case">
-                          {formatCompactNumber(displayBalance, 4)} {selectedToken.symbol.split(" ")[0]}
+                          {formatCompactNumber(displayBalance, 4)}{" "}
+                          {selectedToken.symbol.split(" ")[0]}
                         </span>
                       )}
                     </button>
@@ -618,7 +711,10 @@ export default function PerpDepositModal({
                   <button
                     onClick={() => {
                       if (availableBalance > 0) {
-                        const maxAmountStr = formatUnits(availableBalance, selectedToken.decimals);
+                        const maxAmountStr = formatUnits(
+                          availableBalance,
+                          selectedToken.decimals
+                        );
                         setAmount(maxAmountStr);
                         // Debounced effect handles quoting automatically if needsSwap is true
                         if (!needsSwap) {
@@ -651,7 +747,8 @@ export default function PerpDepositModal({
                 {isInsufficientNative && (
                   <p className="text-xs text-red-500 dark:text-red-400 mt-2 flex items-center gap-1">
                     <FiAlertCircle className="w-3 h-3" />
-                    Insufficient ETH for gas. Need ~{formatUnits(gasCostEstimate, 18)} ETH.
+                    Insufficient ETH for gas. Need ~
+                    {formatUnits(gasCostEstimate, 18)} ETH.
                   </p>
                 )}
               </div>
@@ -663,10 +760,12 @@ export default function PerpDepositModal({
                     <FiInfo className="w-4 h-4 text-blue-500 dark:text-blue-400 mt-0.5 flex-shrink-0" />
                     <div>
                       <p className="text-xs text-blue-700 dark:text-blue-300 font-medium">
-                        {selectedToken.symbol} will be swapped to USDC before depositing.
+                        {selectedToken.symbol} will be swapped to USDC before
+                        depositing.
                       </p>
                       <p className="text-[10px] text-blue-600/70 dark:text-blue-400/70 mt-0.5">
-                        The Pulse wallet will execute the swap automatically on-chain.
+                        The Pulse wallet will execute the swap automatically
+                        on-chain.
                       </p>
                     </div>
                   </div>
@@ -698,7 +797,9 @@ export default function PerpDepositModal({
                         }`}
                     >
                       <div className="flex items-center justify-between text-xs">
-                        <span className="text-gray-600 dark:text-gray-400">Estimated USDC received</span>
+                        <span className="text-gray-600 dark:text-gray-400">
+                          Estimated USDC received
+                        </span>
                         <span
                           className={`font-bold flex items-center gap-1.5 ${quoteInfo.isBelowMin
                             ? "text-red-600 dark:text-red-400"
@@ -707,8 +808,14 @@ export default function PerpDepositModal({
                               : "text-emerald-700 dark:text-emerald-400"
                             }`}
                         >
-                          {(isQuoteStale || isQuoting) && <FiRefreshCw className="w-3 h-3 animate-spin" />}
-                          ~{Number(formatUnits(quoteInfo.amountOut || "0", 6)).toFixed(2)} USDC
+                          {(isQuoteStale || isQuoting) && (
+                            <FiRefreshCw className="w-3 h-3 animate-spin" />
+                          )}
+                          ~
+                          {Number(
+                            formatUnits(quoteInfo.amountOut || "0", 6)
+                          ).toFixed(2)}{" "}
+                          USDC
                         </span>
                       </div>
 
@@ -721,7 +828,8 @@ export default function PerpDepositModal({
                       {quoteInfo.isBelowMin && !isQuoteStale && !isQuoting && (
                         <p className="text-xs text-red-500 dark:text-red-400 mt-1 flex items-center gap-1">
                           <FiAlertCircle className="w-3 h-3" />
-                          Below minimum deposit ({formatUnits(minimumUsdcDeposit, 6)} USDC)
+                          Below minimum deposit (
+                          {formatUnits(minimumUsdcDeposit, 6)} USDC)
                         </p>
                       )}
 
@@ -740,7 +848,10 @@ export default function PerpDepositModal({
               {/* Time Notice */}
               <div className="flex items-center gap-2 text-[10px] text-gray-500 dark:text-gray-500 px-1">
                 <FiClock className="w-3.5 h-3.5" />
-                <span>Funds appear in your perp account within 2-3 minutes after deposit.</span>
+                <span>
+                  Funds appear in your perp account within 2-3 minutes after
+                  deposit.
+                </span>
               </div>
 
               {/* Deposit Button */}
@@ -751,7 +862,10 @@ export default function PerpDepositModal({
                 className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-widest text-white transition-all ${selectedDex === "asterdex"
                   ? "bg-gradient-to-r from-purple-600 to-violet-500"
                   : "bg-gradient-to-r from-blue-600 to-cyan-500"
-                  } ${!canDeposit ? "opacity-40 cursor-not-allowed" : "hover:shadow-lg shadow-blue-500/20"}`}
+                  } ${!canDeposit
+                    ? "opacity-40 cursor-not-allowed"
+                    : "hover:shadow-lg shadow-blue-500/20"
+                  }`}
               >
                 {isLoading ? (
                   <div className="flex items-center justify-center gap-2">

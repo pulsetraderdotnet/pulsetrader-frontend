@@ -5,9 +5,9 @@ import toast from "react-hot-toast";
 import PerpDepositModal from "@/components/walletManager/modal/PerpDepositModal";
 import PerpWithdrawModal from "@/components/walletManager/modal/PerpWithdrawModal";
 import { PRECISION_DECIMALS } from "@/constants/common/utils";
-import Service from "@/service/user-service";
 import { WalletType, UserType } from "@/type/common";
 import { safeFormatNumber, safeParseUnits } from "@/utility/handy";
+import { getPerpExchangeAvailableBalance } from "@/lib/oracle/perpAccountState";
 
 type DexName = "asterdex" | "hyperliquid";
 
@@ -59,11 +59,12 @@ function fmtUsd(val: string): string {
   return safeFormatNumber(String(val), PRECISION_DECIMALS, 4);
 }
 
-function hasApprovedAgent(wallet: WalletType, exchange: DexName): boolean {
+function hasApprovedAgent(wallet: WalletType, exchange: DexName, isMainnet: boolean): boolean {
+  const targetExchange = isMainnet ? exchange.toLowerCase() : `${exchange.toLowerCase()}-testnet`;
   return (
     wallet.agentDetails?.some(
       (detail) =>
-        detail.exchange?.toLowerCase() === exchange && detail.isApproved === true,
+        detail.exchange?.toLowerCase() === targetExchange && detail.isApproved === true,
     ) === true
   );
 }
@@ -75,6 +76,7 @@ export default function PerpTab({
   user,
 }: PerpTabProps) {
   const [activeDex, setActiveDex] = useState<DexName>("hyperliquid");
+  const [isMainnet, setIsMainnet] = useState<boolean>(true);
   const [isDepositModalOpen, setIsDepositModalOpen] = useState(false);
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -83,44 +85,41 @@ export default function PerpTab({
     hyperliquid: String(perpBalances.hyperliquid),
   });
 
-  useEffect(() => {
-    setLocalBalance({
-      asterdex: String(perpBalances.asterdex),
-      hyperliquid: String(perpBalances.hyperliquid),
-    });
-  }, [perpBalances]);
-
   const currentRaw = localBalance[activeDex];
   const hasFunds = Number(currentRaw) > 0;
   const dex = DEX_CONFIG[activeDex];
-  const isApproved = hasApprovedAgent(selectedWallet, activeDex);
+  const isApproved = hasApprovedAgent(selectedWallet, activeDex, isMainnet);
 
   const handleRefreshBalance = useCallback(async () => {
     if (!selectedWallet?.address) return;
     setIsRefreshing(true);
     try {
-      const res = (await Service.getPerpBalance({
-        walletAddress: selectedWallet.address,
-        exchange: activeDex,
-      })) as PerpServiceResponse;
-      const raw = safeParseUnits(extractBalance(res), PRECISION_DECIMALS);
+      const balance = await getPerpExchangeAvailableBalance(
+        selectedWallet.address,
+        activeDex,
+        isMainnet
+      );
+      const raw =
+        balance !== undefined && balance !== null
+          ? safeParseUnits(String(balance), PRECISION_DECIMALS)
+          : "0";
       setLocalBalance((prev) => ({ ...prev, [activeDex]: raw }));
     } catch {
       toast.error("Failed to refresh balance");
     } finally {
       setIsRefreshing(false);
     }
-  }, [activeDex, selectedWallet?.address]);
+  }, [activeDex, isMainnet, selectedWallet?.address]);
+
+  useEffect(() => {
+    handleRefreshBalance();
+  }, [handleRefreshBalance]);
 
   const handleDexSwitch = useCallback(
     (next: DexName) => {
       setActiveDex(next);
-      setLocalBalance((prev) => ({
-        ...prev,
-        [next]: String(perpBalances[next]),
-      }));
     },
-    [perpBalances],
+    [],
   );
 
   const handleWithdrawSuccess = useCallback(() => {
@@ -130,28 +129,67 @@ export default function PerpTab({
 
   return (
     <div className="space-y-4">
-      {/* DEX Switcher */}
-      <div className="bg-white dark:bg-[#13131a] border border-black/5 dark:border-white/5 rounded-2xl p-1.5 flex gap-1">
-        {(["hyperliquid"] as DexName[]).map((d) => (
+      {/* DEX Switcher & Network Toggle */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2">
+        {/* DEX Switcher */}
+        <div className="bg-white dark:bg-[#13131a] border border-black/5 dark:border-white/5 rounded-2xl p-1.5 flex gap-1 flex-1">
+          {(["hyperliquid"] as DexName[]).map((d) => (
+            <button
+              key={d}
+              onClick={() => handleDexSwitch(d)}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${activeDex === d
+                ? `${DEX_CONFIG[d].activeBg} text-black shadow-sm`
+                : "text-gray-500 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5"
+                }`}
+            >
+              {DEX_CONFIG[d].label}
+            </button>
+          ))}
+        </div>
+
+        {/* Network Toggle (Mainnet / Testnet) */}
+        <div className="bg-white dark:bg-[#13131a] border border-black/5 dark:border-white/5 rounded-2xl p-1.5 flex gap-1 self-start sm:self-auto">
           <button
-            key={d}
-            onClick={() => handleDexSwitch(d)}
-            className={`flex-1 py-2.5 rounded-xl text-sm font-bold transition-all ${activeDex === d
-              ? `${DEX_CONFIG[d].activeBg} text-black shadow-sm`
-              : "text-gray-500 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5"
+            type="button"
+            onClick={() => setIsMainnet(true)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${isMainnet
+                ? "bg-emerald-500 text-white shadow-sm"
+                : "text-gray-500 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5"
               }`}
           >
-            {DEX_CONFIG[d].label}
+            <span className={`w-2 h-2 rounded-full ${isMainnet ? "bg-white" : "bg-emerald-500"}`} />
+            Mainnet
           </button>
-        ))}
+          <button
+            type="button"
+            onClick={() => setIsMainnet(false)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${!isMainnet
+                ? "bg-amber-500 text-white shadow-sm"
+                : "text-gray-500 hover:text-black dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/5"
+              }`}
+          >
+            <span className={`w-2 h-2 rounded-full ${!isMainnet ? "bg-white" : "bg-amber-500"}`} />
+            Testnet
+          </button>
+        </div>
       </div>
 
       {/* Balance Card */}
       <div className="bg-white dark:bg-[#13131a] border border-black/5 dark:border-white/5 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-bold uppercase tracking-widest text-gray-500 mb-1">
-            Perp Balance
-          </p>
+          <div className="flex items-center gap-2 mb-1">
+            <p className="text-xs font-bold uppercase tracking-widest text-gray-500">
+              Perp Balance
+            </p>
+            <span
+              className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${isMainnet
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20"
+                  : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20"
+                }`}
+            >
+              {isMainnet ? "Mainnet" : "Testnet"}
+            </span>
+          </div>
           <div className="flex items-center gap-2">
             <p className={`text-3xl font-black ${dex.color}`}>
               ${fmtUsd(String(currentRaw))}
@@ -170,12 +208,14 @@ export default function PerpTab({
           </div>
           {!hasFunds && (
             <p className="text-xs text-amber-500 dark:text-amber-400 mt-1 font-medium">
-              Deposit at least 10 Arbitrum USDC to start. Estimated deposit time is 10-15 minutes.
+              {isMainnet
+                ? "Deposit at least 10 Arbitrum USDC to start. Estimated deposit time is 10-15 minutes."
+                : "Deposit Arbitrum Sepolia testnet USDC to start trading on Hyperliquid Testnet."}
             </p>
           )}
           {isApproved && (
             <p className="text-xs text-emerald-500 dark:text-emerald-400 mt-1 font-semibold">
-              Agent wallet already approved for trading
+              Agent wallet already approved for {isMainnet ? "Mainnet" : "Testnet"} trading
             </p>
           )}
         </div>
@@ -204,10 +244,10 @@ export default function PerpTab({
       {/* Info Card */}
       <div className={`${dex.bg} ${dex.border} border rounded-2xl p-4`}>
         <p className="text-sm font-bold text-black dark:text-white mb-1">
-          Deposit perp collateral
+          Deposit perp collateral ({isMainnet ? "Mainnet" : "Testnet"})
         </p>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          Deposit collateral into your {DEX_CONFIG[activeDex].label} perp account.
+          Deposit collateral into your {DEX_CONFIG[activeDex].label} {isMainnet ? "Mainnet" : "Testnet"} perp account.
         </p>
       </div>
 
@@ -224,6 +264,7 @@ export default function PerpTab({
           wallet={selectedWallet}
           initialDex={activeDex}
           user={user}
+          isMainnet={isMainnet}
         />
       )}
 
@@ -235,6 +276,7 @@ export default function PerpTab({
           dex={activeDex}
           currentBalanceUsd={currentRaw}
           onWithdrawSuccess={handleWithdrawSuccess}
+          isMainnet={isMainnet}
         />
       )}
     </div>

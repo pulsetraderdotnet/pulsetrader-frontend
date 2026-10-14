@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { OrderType, OrderTokenType, TechnicalLogicType, TechnicalWeightsType } from "@/type/order";
 
-
 import { PerpCollateral, CollateralTokens } from "@/constants/common/tokens";
 import { PerpetualStrategies, PerpOrderModes } from "@/constants/common/frontend";
 import { FiChevronDown, FiAlertTriangle, FiAlertCircle } from "react-icons/fi";
@@ -23,12 +22,14 @@ import NumberInput from "./TradeBoxCommon/NumberInput";
 import EstSpotOrders from "@/components/order/estimate/estPerpOrder";
 import PerpAccountSelect from "@/components/walletManager/selection/perpAccountSelect";
 import ConfirmationModal from "../common/Confirmation/ConfirmationBox";
-import PairTradingPanel, { type PairTradingConfig } from "./PairTradingPanel";
+import PairTradingPanel, {
+  computePairGridPrices,
+  type PairTradingConfig,
+} from "./PairTradingPanel";
 
 // hook
 import { useOrder } from "@/hooks/useOrder";
 import { useDebounce } from "@/hooks/useDebounce";
-
 
 //library
 import { getTokenPrices } from "@/lib/oracle/spotTokenPrice";
@@ -44,16 +45,10 @@ import {
 } from "@/utility/orderUtility";
 import { displayNumber } from "@/utility/displayPrice";
 import type { MarketSnapshotRef, StableMarketTokenInfo } from "@/type/market";
-import { normalizeCoin } from "@/utility/perpUtils"
+import { normalizeCoin } from "@/utility/perpUtils";
 
 const EST_PERP_MAINTENANCE_BPS = 50;
 
-// Cheap structural comparison for the small (bounded by config.maxGridNumber)
-// arrays configurePerpOrder() returns. Used to avoid calling setEstOrders
-// with a brand-new array reference when the computed content is actually
-// identical to what's already in state — without this, any effect that
-// recomputes estOrders on every render (e.g. because one of its inputs from
-// a parent hook isn't referentially stable) would trigger an update loop.
 const areOrderListsEqual = (a: OrderType[], b: OrderType[]) => {
   if (a === b) return true;
   if (a.length !== b.length) return false;
@@ -87,7 +82,9 @@ const isWeightedEntry = (entry: any): entry is TechnicalWeightsType => {
   return entry && "targetWeight" in entry && "weights" in entry;
 };
 
-const getEntryType = (entry: TechnicalLogicType | TechnicalWeightsType | null): "logic" | "weight" | "price" => {
+const getEntryType = (
+  entry: TechnicalLogicType | TechnicalWeightsType | null,
+): "logic" | "weight" | "price" => {
   if (!entry) return "price";
   if (isWeightedEntry(entry)) return "weight";
   return "logic";
@@ -109,7 +106,7 @@ interface perpTradeBoxProps {
     maxGridNumber: number;
     orderTradeFee: number;
     userLevels: any;
-  }
+  };
 }
 
 const areEqualPerpTradeBoxProps = (
@@ -141,19 +138,15 @@ function PerpTradeBox({
   protocol,
   marketSnapshotRef,
   isAdvancedSymbol = false,
-  config = { minimumOrderSize: 15, maxGridNumber: 2, orderTradeFee: 0, userLevels: {} }
+  config = {
+    minimumOrderSize: 15,
+    maxGridNumber: 2,
+    orderTradeFee: 0,
+    userLevels: {},
+  },
 }: perpTradeBoxProps) {
-
   const { configurePerpOrder, submitOrder } = useOrder();
 
-  // ── Stabilize hook-provided callbacks ──────────────────────────────────
-  // If useOrder() returns new function instances on every render (it isn't
-  // guaranteed to memoize them), any effect depending on configurePerpOrder
-  // directly would re-run every single render, and if that effect calls
-  // setState unconditionally, React throws "Maximum update depth exceeded".
-  // Mirroring the latest function into a ref (updated in the render body,
-  // not in an effect) lets the effect below call the current function
-  // without ever listing it as a dependency.
   const configurePerpOrderRef = useRef(configurePerpOrder);
   configurePerpOrderRef.current = configurePerpOrder;
   const submitOrderRef = useRef(submitOrder);
@@ -165,7 +158,7 @@ function PerpTradeBox({
   const [isConfirmationOpen, setIsConfirmationOpen] = useState(false);
   const [creationPending, setCreationPending] = useState(false);
 
-  // ── Pair Trading State ─────────────────────────────────────────────────────
+  // ── Pair Trading State ─────────────────────────────────────────────
   const [pairConfig, setPairConfig] = useState<PairTradingConfig | null>(null);
   const [pairIsReady, setPairIsReady] = useState(false);
 
@@ -191,21 +184,21 @@ function PerpTradeBox({
   );
   const [collateralPrice, setCollateralPrice] = useState<number>(0);
   const [orderMode, setOrderMode] = useState<"Live" | "Demo" | "Testnet">("Live");
-  // Order Configuration State
+
   const [initialOrderSize, setInitialOrderSize] = useState<string>("");
   const [entryPrice, setEntryPrice] = useState<string>(tokenInfo?.priceUsd || "");
   const [tpPrice, setTpPrice] = useState(tokenInfo?.priceUsd || "");
-  const [technicalEntry, setTechnicalEntry] = useState<TechnicalLogicType | TechnicalWeightsType | null>(null);
+  const [technicalEntry, setTechnicalEntry] = useState<
+    TechnicalLogicType | TechnicalWeightsType | null
+  >(null);
   const [orderName, setOrderName] = useState<string>("");
   const [slippage, setSlippage] = useState<number>(1);
 
-  // Grid Configuration State
   const [gridNumber, setGridNumber] = useState<number>(1);
   const [gridDistance, setGridDistance] = useState<number>(1);
   const [gridMultiplier, setGridMultiplier] = useState<number>(1);
   const [orderSizeMultiplier, setOrderSizeMultiplier] = useState<number>(1);
 
-  // Risk Management State
   const [tpPercentage, setTpPercentage] = useState<number>(10);
   const [slPercentage, setSlPercentage] = useState<number>(10);
   const [isActiveStopLoss, setIsActiveStopLoss] = useState<boolean>(false);
@@ -214,17 +207,17 @@ function PerpTradeBox({
   const [isReEntrance, setIsReEntrance] = useState<boolean>(false);
   const [reEntranceLimit, setReEntranceLimit] = useState<number>(1);
 
-  const PERP_MINIMUM_ORDER_SIZE = config.minimumOrderSize < 10 ? 10 : config.minimumOrderSize;
+  const PERP_MINIMUM_ORDER_SIZE =
+    config.minimumOrderSize < 10 ? 10 : config.minimumOrderSize;
 
-  // Advanced Settings State
   const priority = 2;
   const executionSpeed = "standard";
 
-  // Wallet & Order State
   const [gridsByWallet, setGridsByWallet] = useState<GridsByWallet>({});
   const [areWalletsReady, setWalletsReady] = useState<boolean>(false);
   const [perpAccountGateOk, setPerpAccountGateOk] = useState(false);
   const [estOrders, setEstOrders] = useState<OrderType[]>([]);
+
   const feeTokenOptions: OrderTokenType[] = useMemo(
     () => Object.values(CollateralTokens[42161]),
     [],
@@ -243,7 +236,12 @@ function PerpTradeBox({
   const [feeTokenPrice, setFeeTokenPrice] = useState<number>(0);
 
   const isFeeExempt = useMemo(
-    () => isTradeFeeExemptStatus(config.userLevels, user?.status, orderMode || 'Live'),
+    () =>
+      isTradeFeeExemptStatus(
+        config.userLevels,
+        user?.status,
+        orderMode || "Live",
+      ),
     [user, orderMode],
   );
 
@@ -262,9 +260,7 @@ function PerpTradeBox({
   const [debouncedEntryPrice] = useDebounce(entryPrice, 300);
   const [debouncedTpPrice] = useDebounce(tpPrice, 300);
 
-  // Validation State
-  const [isOrderNameValidate, setIsOrderNameValidate] =
-    useState<boolean>(false);
+  const [isOrderNameValidate, setIsOrderNameValidate] = useState<boolean>(false);
 
   const negativeGridDecrementalPriceProtection = useCallback(() => {
     if (gridDistance > 0 && gridNumber > 1 && gridMultiplier > 0) {
@@ -278,12 +274,10 @@ function PerpTradeBox({
     return false;
   }, [gridDistance, gridNumber, gridMultiplier]);
 
-  // ========================================================================
-  // Effects
-  // ========================================================================
-
+  // ── Live price sync ────────────────────────────────────────────────
   const syncLiveMarketState = useCallback(() => {
-    const nextPriceUsd = marketSnapshotRef?.current?.priceUsd || tokenInfo?.priceUsd || "";
+    const nextPriceUsd =
+      marketSnapshotRef?.current?.priceUsd || tokenInfo?.priceUsd || "";
     const nextMarkPriceUsd = marketSnapshotRef?.current?.markPrice || 0;
 
     setLiveTokenPriceUsd((previous) =>
@@ -295,19 +289,13 @@ function PerpTradeBox({
   }, [marketSnapshotRef, tokenInfo?.priceUsd]);
 
   useEffect(() => {
-    // Always sync once immediately (covers both the "polling" case below and
-    // the case where there's no marketSnapshotRef at all, e.g. static data).
     syncLiveMarketState();
-
-    if (!marketSnapshotRef) {
-      return undefined;
-    }
-
+    if (!marketSnapshotRef) return undefined;
     const intervalId = window.setInterval(syncLiveMarketState, 500);
     return () => window.clearInterval(intervalId);
   }, [marketSnapshotRef, syncLiveMarketState, tokenInfo?.address]);
 
-  // Fetch Collateral Price
+  // ── Collateral price fetch ────────────────────────────────────────
   const collateralPriceRequestId = useRef(0);
   useEffect(() => {
     const requestId = ++collateralPriceRequestId.current;
@@ -345,7 +333,7 @@ function PerpTradeBox({
           tokenAddress: queryAddress,
           chainId,
         });
-        if (requestId !== collateralPriceRequestId.current) return; // superseded
+        if (requestId !== collateralPriceRequestId.current) return;
         const next = price ? Number(price) : 0;
         setCollateralPrice((prev) => (prev === next ? prev : next));
       } catch {
@@ -363,12 +351,6 @@ function PerpTradeBox({
     chainId,
   ]);
 
-  // ─── Reset entry/tp prices when the traded token changes ──────────────
-  // Deliberately scoped to tokenInfo?.address only — it must NOT re-fire on
-  // every live price tick (that previously came from reading
-  // marketSnapshotRef.current?.priceUsd directly in the dependency array,
-  // an anti-pattern since refs aren't tracked by React), or it would
-  // overwrite whatever price the user has typed in.
   useEffect(() => {
     const nextPrice = tokenInfo?.priceUsd || "";
     if (!nextPrice) return;
@@ -377,7 +359,7 @@ function PerpTradeBox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenInfo?.address]);
 
-  // Fee Token Price
+  // ── Fee token price fetch ─────────────────────────────────────────
   const feeTokenPriceRequestId = useRef(0);
   useEffect(() => {
     const requestId = ++feeTokenPriceRequestId.current;
@@ -408,7 +390,9 @@ function PerpTradeBox({
         feeToken.symbol.toLowerCase() === collateralToken.symbol.toLowerCase() &&
         collateralPrice > 0
       ) {
-        setFeeTokenPrice((prev) => (prev === collateralPrice ? prev : collateralPrice));
+        setFeeTokenPrice((prev) =>
+          prev === collateralPrice ? prev : collateralPrice,
+        );
         return;
       }
 
@@ -430,7 +414,7 @@ function PerpTradeBox({
           chainId,
         });
 
-        if (requestId !== feeTokenPriceRequestId.current) return; // superseded
+        if (requestId !== feeTokenPriceRequestId.current) return;
         const next = price ? Number(price) : 0;
         setFeeTokenPrice((prev) => (prev === next ? prev : next));
       } catch {
@@ -450,59 +434,59 @@ function PerpTradeBox({
     chainId,
   ]);
 
-  // ========================================================================
-  // Event Handlers
-  // ========================================================================
-
-  const handleTrailingMode = useCallback((value: boolean) => {
-    if (value == true) {
-      setIsActiveStopLoss(true);
-      if (slPercentage === 0) {
-        setSlPercentage(10);
+  // ── Handlers ──────────────────────────────────────────────────────
+  const handleTrailingMode = useCallback(
+    (value: boolean) => {
+      if (value == true) {
+        setIsActiveStopLoss(true);
+        if (slPercentage === 0) {
+          setSlPercentage(10);
+        }
       }
-    }
-    setIsTrailingMode(value);
-  }, [slPercentage]);
+      setIsTrailingMode(value);
+    },
+    [slPercentage],
+  );
 
   const handleOrderSize = useCallback((value: string) => {
     setInitialOrderSize(value);
   }, []);
 
-  const handleStrategyChange = useCallback((strategy: (typeof PerpetualStrategies)[0]) => {
-    setSelectedStrategy(strategy);
-    setGridNumber(1);
-    setShowStrategyDropdown(false);
+  const handleStrategyChange = useCallback(
+    (strategy: (typeof PerpetualStrategies)[0]) => {
+      setSelectedStrategy(strategy);
+      setGridNumber(1);
+      setShowStrategyDropdown(false);
 
-    if (selectedStrategy.id === "algo" && strategy.id !== "algo") {
-      setTechnicalEntry(null);
-    }
-
-    if (strategy.id === "sellToken") {
-      const tokenFromConstants = Object.values(PerpCollateral[chainId]).find(
-        (t: any) =>
-          t.address.toLowerCase() === tokenInfo.address?.toLowerCase(),
-      ) as any;
-
-      if (tokenFromConstants) {
-        setCollateralToken(tokenFromConstants);
-      } else {
-        setCollateralToken({
-          address: tokenInfo.address,
-          name: tokenInfo.name,
-          symbol: tokenInfo.symbol,
-          decimals: tokenInfo.decimals,
-          imageUrl: tokenInfo.imageUrl || "/tokenLogo.png",
-        } as any);
+      if (selectedStrategy.id === "algo" && strategy.id !== "algo") {
+        setTechnicalEntry(null);
       }
-    } else {
-      setCollateralToken(Object.values(PerpCollateral[chainId])[0]);
-    }
-  }, [chainId, selectedStrategy.id, tokenInfo]);
 
-  // ========================================================================
-  // Validation Logic
-  // ========================================================================
+      if (strategy.id === "sellToken") {
+        const tokenFromConstants = Object.values(PerpCollateral[chainId]).find(
+          (t: any) =>
+            t.address.toLowerCase() === tokenInfo.address?.toLowerCase(),
+        ) as any;
 
+        if (tokenFromConstants) {
+          setCollateralToken(tokenFromConstants);
+        } else {
+          setCollateralToken({
+            address: tokenInfo.address,
+            name: tokenInfo.name,
+            symbol: tokenInfo.symbol,
+            decimals: tokenInfo.decimals,
+            imageUrl: tokenInfo.imageUrl || "/tokenLogo.png",
+          } as any);
+        }
+      } else {
+        setCollateralToken(Object.values(PerpCollateral[chainId])[0]);
+      }
+    },
+    [chainId, selectedStrategy.id, tokenInfo],
+  );
+
+  // ── Computed Values ───────────────────────────────────────────────
   const estimatedUsdValue = useMemo(() => {
     if (!initialOrderSize || !collateralPrice) return 0;
     return Number(initialOrderSize) * collateralPrice;
@@ -570,7 +554,7 @@ function PerpTradeBox({
   }, [collateralPrice, entryForLiquidationUsd, initialOrderSize, leverage]);
 
   const qtyValidationError = useMemo(() => {
-    if (protocol !== 'asterdex') return null;
+    if (protocol !== "asterdex") return null;
     if (estimatedAssetQuantity <= 0) {
       return `Invalid Est. quantity`;
     }
@@ -587,85 +571,124 @@ function PerpTradeBox({
     return null;
   }, [protocol, estimatedAssetQuantity, tokenInfo?.minQty, tokenInfo?.maxQty]);
 
-  const confirmationDescription = useMemo(() => (
-    <div className="space-y-4">
-      <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-4">
-        Please review your perpetual order details before confirming.
-      </p>
-      <div className="flex items-start gap-3 p-4 bg-red-100 dark:bg-red-500/10 rounded-xl border border-red-200 dark:border-red-500/20 mt-6">
-        <FiAlertTriangle className="w-5 h-5 text-red-600 dark:text-red-500 mt-0.5 shrink-0" />
-        <p className="text-xs font-mono text-red-800 dark:text-red-300/90 leading-relaxed text-left">
-          {orderMode === 'Live' ? `This order will be executed on the live ${protocol} exchange. Please ensure you have sufficient funds in your ${protocol} account.` :
-            orderMode === 'Testnet' ? `This order will be executed on the testnet ${protocol} exchange. Please ensure you have sufficient funds in your testnet ${protocol} account.` :
-              'This is demo order for testing purposes. No real trades will be executed'}
+  const confirmationDescription = useMemo(
+    () => (
+      <div className="space-y-4">
+        <p className="text-sm text-gray-600 dark:text-gray-400 text-center mb-4">
+          Please review your perpetual order details before confirming.
         </p>
-      </div>
-      <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/20 mt-6">
-        <FiAlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
-        <p className="text-xs text-amber-800 dark:text-amber-300/90 leading-relaxed text-left">
-          Perpetual trading involves significant risk. Ensure you have sufficient margin to avoid liquidation.
-        </p>
-      </div>
-
-
-
-      <div className="bg-gray-50 dark:bg-white/5 rounded-xl p-5 border border-gray-200 dark:border-white/10 space-y-4 shadow-inner">
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-gray-500 dark:text-gray-400">Action</span>
-          <span className={`text-base font-bold flex items-center gap-1.5 ${isLong ? 'text-emerald-500' : 'text-rose-500'}`}>
-            <div className={`w-2 h-2 rounded-full ${isLong ? 'bg-emerald-500' : 'bg-rose-500'}`} />
-            {isLong ? 'Long' : 'Short'} {tokenInfo?.symbol}
-          </span>
+        <div className="flex items-start gap-3 p-4 bg-red-100 dark:bg-red-500/10 rounded-xl border border-red-200 dark:border-red-500/20 mt-6">
+          <FiAlertTriangle className="w-5 h-5 text-red-600 dark:text-red-500 mt-0.5 shrink-0" />
+          <p className="text-xs font-mono text-red-800 dark:text-red-300/90 leading-relaxed text-left">
+            {orderMode === "Live"
+              ? `This order will be executed on the live ${protocol} exchange. Please ensure you have sufficient funds in your ${protocol} account.`
+              : orderMode === "Testnet"
+                ? `This order will be executed on the testnet ${protocol} exchange. Please ensure you have sufficient funds in your testnet ${protocol} account.`
+                : "This is demo order for testing purposes. No real trades will be executed"}
+          </p>
+        </div>
+        <div className="flex items-start gap-3 p-4 bg-amber-50 dark:bg-amber-500/10 rounded-xl border border-amber-200 dark:border-amber-500/20 mt-6">
+          <FiAlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-800 dark:text-amber-300/90 leading-relaxed text-left">
+            Perpetual trading involves significant risk. Ensure you have
+            sufficient margin to avoid liquidation.
+          </p>
         </div>
 
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-gray-500 dark:text-gray-400">Position Size</span>
-          <span className="text-base font-bold text-gray-900 dark:text-white">
-            {initialOrderSize || '0'} {tokenInfo?.symbol} <span className="text-gray-400 mx-1 font-normal">×</span> {leverage}x
-          </span>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-gray-500 dark:text-gray-400">Strategy</span>
-          <span className="text-sm font-bold text-gray-900 dark:text-white px-2.5 py-1 bg-gray-200/50 dark:bg-white/10 rounded-md">
-            {selectedStrategy?.name || 'Manual'}
-          </span>
-        </div>
-
-        <div className="flex justify-between items-center">
-          <span className="text-sm text-gray-500 dark:text-gray-400">Orders Count</span>
-          <span className="text-sm font-bold text-gray-900 dark:text-white px-2.5 py-1 bg-gray-200/50 dark:bg-white/10 rounded-md">
-            {estOrders.length}
-          </span>
-        </div>
-
-        {(Number(tpPercentage) > 0 || Number(slPercentage) > 0) && (
-          <div className="pt-4 mt-2 border-t border-gray-200 dark:border-white/10 space-y-3">
-            {Number(tpPercentage) > 0 && (
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-gray-500 dark:text-gray-400">Take Profit</span>
-                <span className="text-sm font-bold text-emerald-500">+{tpPercentage}%</span>
-              </div>
-            )}
-            {Number(slPercentage) > 0 && isActiveStopLoss && (
-              <div className="flex justify-between items-center">
-                <span className="text-sm text-gray-500 dark:text-gray-400">Stop Loss</span>
-                <span className="text-sm font-bold text-rose-500">-{slPercentage}%</span>
-              </div>
-            )}
+        <div className="bg-gray-50 dark:bg-white/5 rounded-xl p-5 border border-gray-200 dark:border-white/10 space-y-4 shadow-inner">
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Action
+            </span>
+            <span
+              className={`text-base font-bold flex items-center gap-1.5 ${isLong ? "text-emerald-500" : "text-rose-500"
+                }`}
+            >
+              <div
+                className={`w-2 h-2 rounded-full ${isLong ? "bg-emerald-500" : "bg-rose-500"
+                  }`}
+              />
+              {isLong ? "Long" : "Short"} {tokenInfo?.symbol}
+            </span>
           </div>
-        )}
+
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Position Size
+            </span>
+            <span className="text-base font-bold text-gray-900 dark:text-white">
+              {initialOrderSize || "0"} {tokenInfo?.symbol}{" "}
+              <span className="text-gray-400 mx-1 font-normal">×</span>{" "}
+              {leverage}x
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Strategy
+            </span>
+            <span className="text-sm font-bold text-gray-900 dark:text-white px-2.5 py-1 bg-gray-200/50 dark:bg-white/10 rounded-md">
+              {selectedStrategy?.name || "Manual"}
+            </span>
+          </div>
+
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              Orders Count
+            </span>
+            <span className="text-sm font-bold text-gray-900 dark:text-white px-2.5 py-1 bg-gray-200/50 dark:bg-white/10 rounded-md">
+              {estOrders.length}
+            </span>
+          </div>
+
+          {(Number(tpPercentage) > 0 || Number(slPercentage) > 0) && (
+            <div className="pt-4 mt-2 border-t border-gray-200 dark:border-white/10 space-y-3">
+              {Number(tpPercentage) > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    Take Profit
+                  </span>
+                  <span className="text-sm font-bold text-emerald-500">
+                    +{tpPercentage}%
+                  </span>
+                </div>
+              )}
+              {Number(slPercentage) > 0 && isActiveStopLoss && (
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
+                    Stop Loss
+                  </span>
+                  <span className="text-sm font-bold text-rose-500">
+                    -{slPercentage}%
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+    ),
+    [
+      isLong,
+      tokenInfo?.symbol,
+      initialOrderSize,
+      orderMode,
+      leverage,
+      selectedStrategy?.name,
+      estOrders.length,
+      tpPercentage,
+      slPercentage,
+      isActiveStopLoss,
+    ],
+  );
 
-
-    </div>
-  ), [isLong, tokenInfo?.symbol, initialOrderSize, orderMode, leverage, selectedStrategy?.name, estOrders.length, tpPercentage, slPercentage, isActiveStopLoss]);
-
-  // ─── Compute readyToSubmit and submitText with useMemo ──────────────
+  // ── Ready-to-submit + submitText ─────────────────────────────────
   const { isReady, submitText } = useMemo(() => {
-    const withStatus = (isValid: boolean, text: string) => ({ isReady: isValid, submitText: text });
+    const withStatus = (isValid: boolean, text: string) => ({
+      isReady: isValid,
+      submitText: text,
+    });
 
-    // Pair trading has its own validation inside PairTradingPanel
     if (isPairTrading) {
       if (!isOrderNameValidate || orderName.trim() === "") {
         return withStatus(false, "Set Unique Name");
@@ -673,7 +696,10 @@ function PerpTradeBox({
       if (!isConnected) {
         return withStatus(false, "Connect your wallet");
       }
-      return withStatus(pairIsReady, pairIsReady ? "Create Pair Orders" : "Complete Pair Setup");
+      return withStatus(
+        pairIsReady,
+        pairIsReady ? "Create Pair Orders" : "Complete Pair Setup",
+      );
     }
 
     let _submitText = "Create Order";
@@ -707,7 +733,11 @@ function PerpTradeBox({
     }
 
     const minQty = Number(tokenInfo?.minQty || 0);
-    if (minQty > 0 && estimatedAssetQuantity > 0 && estimatedAssetQuantity < minQty) {
+    if (
+      minQty > 0 &&
+      estimatedAssetQuantity > 0 &&
+      estimatedAssetQuantity < minQty
+    ) {
       return withStatus(false, `Minimum quantity ${minQty}`);
     }
 
@@ -733,7 +763,10 @@ function PerpTradeBox({
     }
 
     if (gridNumber < 1 || gridNumber > config.maxGridNumber) {
-      return withStatus(false, `Grid must be lower then ${config.maxGridNumber + 1} and not zero`);
+      return withStatus(
+        false,
+        `Grid must be lower then ${config.maxGridNumber + 1} and not zero`,
+      );
     }
 
     if (selectedStrategy.id == "sellToken") {
@@ -758,7 +791,10 @@ function PerpTradeBox({
     }
 
     if (estimatedUsdValue < PERP_MINIMUM_ORDER_SIZE) {
-      return withStatus(false, `Minimum order size $${PERP_MINIMUM_ORDER_SIZE} `);
+      return withStatus(
+        false,
+        `Minimum order size $${PERP_MINIMUM_ORDER_SIZE} `,
+      );
     }
 
     if (
@@ -787,7 +823,10 @@ function PerpTradeBox({
           selectedStrategy.id != "sellToken" &&
           negativeGridDecrementalPriceProtection()
         ) {
-          return withStatus(false, "Grid multiplier is too high set negative target");
+          return withStatus(
+            false,
+            "Grid multiplier is too high set negative target",
+          );
         }
       }
     }
@@ -796,7 +835,10 @@ function PerpTradeBox({
       return withStatus(false, "Connect your wallet");
     }
 
-    if (!orderMode || !(PerpOrderModes.map((mode: any) => mode.label)).includes(orderMode)) {
+    if (
+      !orderMode ||
+      !PerpOrderModes.map((mode: any) => mode.label).includes(orderMode)
+    ) {
       return withStatus(false, "Select valid order mode");
     }
 
@@ -811,11 +853,15 @@ function PerpTradeBox({
       return withStatus(false, "Approve Agent & Deposit First");
     }
 
-
-    const selectedWalletIds = Object.values(gridsByWallet).map((w: any) => w._id);
+    const selectedWalletIds = Object.values(gridsByWallet).map(
+      (w: any) => w._id,
+    );
     const uniqueWallets = Array.from(new Set(selectedWalletIds));
 
-    if (selectedStrategy.id == 'multiScalp' && Number(gridNumber) !== Number(uniqueWallets.length)) {
+    if (
+      selectedStrategy.id == "multiScalp" &&
+      Number(gridNumber) !== Number(uniqueWallets.length)
+    ) {
       return withStatus(false, `Select ${Number(gridNumber)} wallets`);
     }
 
@@ -831,7 +877,6 @@ function PerpTradeBox({
       return withStatus(false, "Fee token price unavailable");
     }
 
-
     const currentProtocol = protocol?.toLowerCase();
     const currentIndexToken = (
       tokenInfo?.address ||
@@ -846,19 +891,25 @@ function PerpTradeBox({
           o.category?.toLowerCase() === "perpetual" &&
           (o.wallet?._id === walletId || o.wallet === walletId) &&
           getOrderIndexTokenAddress(o)?.toLowerCase() === currentIndexToken &&
-          (o?.perp?.protocol)?.toLowerCase() === currentProtocol,
+          o?.perp?.protocol?.toLowerCase() === currentProtocol,
       );
 
       if (currentProtocol === "hyperliquid") {
         if (walletOrders.length > 0) {
-          return withStatus(false, `Hyperliquid: Only 1 position allowed per asset per wallet`);
+          return withStatus(
+            false,
+            `Hyperliquid: Only 1 position allowed per asset per wallet`,
+          );
         }
       } else if (currentProtocol === "asterdex") {
         const sameDirectionCount = walletOrders.filter(
           (o: any) => getOrderPerpetual(o)?.isLong === isLong,
         ).length;
         if (sameDirectionCount >= 1) {
-          return withStatus(false, `Asterdex: Max 1 ${isLong ? "Long" : "Short"} position allowed per wallet`);
+          return withStatus(
+            false,
+            `Asterdex: Max 1 ${isLong ? "Long" : "Short"} position allowed per wallet`,
+          );
         }
       }
     }
@@ -904,25 +955,24 @@ function PerpTradeBox({
     pairIsReady,
   ]);
 
-  // ─── No effect needed for readyToSubmit; we set it in useMemo ──────
   const readyToSubmitOrder = isReady;
 
-  // ========================================================================
-  // Order Management Handlers
-  // ========================================================================
-
-  const handleUpdateOrder = useCallback((orderId: string, updatedOrder: any) => {
-    setEstOrders((prev) =>
-      prev.map((order, index) => {
-        const idFromTable = order._id || `temp-${order.sl}-${index}`;
-        const idFromEdit = order._id || `temp-${order.sl}`;
-        if (idFromTable === orderId || idFromEdit === orderId) {
-          return updatedOrder;
-        }
-        return order;
-      }),
-    );
-  }, []);
+  // ── Order handlers ────────────────────────────────────────────────
+  const handleUpdateOrder = useCallback(
+    (orderId: string, updatedOrder: any) => {
+      setEstOrders((prev) =>
+        prev.map((order, index) => {
+          const idFromTable = order._id || `temp-${order.sl}-${index}`;
+          const idFromEdit = order._id || `temp-${order.sl}`;
+          if (idFromTable === orderId || idFromEdit === orderId) {
+            return updatedOrder;
+          }
+          return order;
+        }),
+      );
+    },
+    [],
+  );
 
   const handleDeleteOrder = useCallback((orderId: string) => {
     setEstOrders((prev) =>
@@ -934,28 +984,43 @@ function PerpTradeBox({
     );
   }, []);
 
-  // ========================================================================
-  // Order Submission
-  // ========================================================================
-
+  // ══════════════════════════════════════════════════════════════════════
+  // ⚡ SUBMIT — pair trading now splits grid legs into N independent
+  //    single-grid requests, each carrying its OWN pre-computed price.
+  // ══════════════════════════════════════════════════════════════════════
   const handleOrderSubmit = useCallback(async () => {
     setCreationPending(true);
 
     try {
-      // ── Pair Trading submission ─────────────────────────────────────────
+      // ── PAIR TRADING PATH ─────────────────────────────────────────────
       if (isPairTrading && pairConfig) {
-        const buildLegParams = (leg: PairTradingConfig["trend" | "counterTrend"], legName: string) => ({
+        /** Build params for a single non-grid leg. */
+        const buildNonGridLegParams = (
+          leg: PairTradingConfig["trend" | "counterTrend"],
+          legName: "trend" | "counterTrend",
+        ) => ({
           gridNumber: 1,
-          targetPrice: leg.entryPrice || liveTokenPriceUsd || tokenInfo?.priceUsd || "0",
+          targetPrice:
+            leg.entryPrice || liveTokenPriceUsd || tokenInfo?.priceUsd || "0",
           activeStopLoss: leg.isActiveStopLoss,
-          entryLogic: leg.technicalEntry && !((leg.technicalEntry as any).targetWeight) ? leg.technicalEntry : null,
-          entryWeight: leg.technicalEntry && (leg.technicalEntry as any).targetWeight ? leg.technicalEntry : null,
-          entryType: leg.technicalEntry ? ((leg.technicalEntry as any).targetWeight ? "weight" : "logic") : "price",
+          entryLogic:
+            leg.technicalEntry && !(leg.technicalEntry as any).targetWeight
+              ? leg.technicalEntry
+              : null,
+          entryWeight:
+            leg.technicalEntry && (leg.technicalEntry as any).targetWeight
+              ? leg.technicalEntry
+              : null,
+          entryType: leg.technicalEntry
+            ? (leg.technicalEntry as any).targetWeight
+              ? "weight"
+              : "logic"
+            : "price",
           mode: orderMode,
           orderSizeMultiplier: 1,
           initialOrderSize: leg.initialOrderSize,
           gridMultiplier: 1,
-          gridDistance: 1,
+          gridDistance: 10,
           collateralToken,
           outputToken,
           orderToken: tokenInfo,
@@ -974,51 +1039,146 @@ function PerpTradeBox({
           leverage: leg.leverage,
           isLong: leg.isLong,
           protocol,
-          // Use address for matching; fall back to symbol for string-keyed exchanges (Hyperliquid)
-          indexTokenAddress: tokenInfo?.symbol || normalizeCoin(tokenInfo?.address),
+          indexTokenAddress:
+            tokenInfo?.symbol || normalizeCoin(tokenInfo?.address),
           feeToken: isFeeExempt ? null : feeToken,
           orderLabel: legName,
         });
 
-        // ── Always regenerate estOrders fresh at submit time ──────────────
-        // Relying on leg.estOrders from state is unsafe: React's async
-        // batching means the estOrders useEffect in PairTradingPanel may
-        // not have fired yet after areWalletsReady changed, leaving
-        // pairConfig.counterTrend.estOrders as [] even when the form is ready.
-        const trendLegParams = buildLegParams(pairConfig.trend, "trend");
-        const ctLegParams = buildLegParams(pairConfig.counterTrend, "counterTrend");
-        const freshTrendEst = configurePerpOrderRef.current(trendLegParams);
-        const freshCtEst = configurePerpOrderRef.current(ctLegParams);
+        /** Build params for a single grid level of the trend leg. */
+        const buildGridLevelParams = (
+          leg: PairTradingConfig["trend"],
+          levelIndex: number,
+          levelPrice: number,
+          levelMargin: number,
+        ) => ({
+          gridNumber: 1, // ← submit as single-grid
+          targetPrice: String(levelPrice),
+          activeStopLoss: leg.isActiveStopLoss,
+          entryLogic:
+            leg.technicalEntry && !(leg.technicalEntry as any).targetWeight
+              ? leg.technicalEntry
+              : null,
+          entryWeight:
+            leg.technicalEntry && (leg.technicalEntry as any).targetWeight
+              ? leg.technicalEntry
+              : null,
+          entryType: leg.technicalEntry
+            ? (leg.technicalEntry as any).targetWeight
+              ? "weight"
+              : "logic"
+            : "price",
+          mode: orderMode,
+          orderSizeMultiplier: 1,
+          initialOrderSize: String(levelMargin),
+          gridMultiplier: 1,
+          gridDistance: 10,
+          collateralToken,
+          outputToken,
+          orderToken: tokenInfo,
+          priority,
+          executionSpeed,
+          orderName,
+          strategy: "pairTrading",
+          chainId,
+          isTrailingMode: leg.isTrailingMode,
+          tpPrice: "",
+          tpPercentage: leg.tpPercentage,
+          slPercentage: leg.slPercentage,
+          isReEntrance: leg.isReEntrance,
+          reEntranceLimit: leg.reEntranceLimit,
+          slippage: leg.slippage,
+          leverage: leg.leverage,
+          isLong: leg.isLong,
+          protocol,
+          indexTokenAddress:
+            tokenInfo?.symbol || normalizeCoin(tokenInfo?.address),
+          feeToken: isFeeExempt ? null : feeToken,
+          orderLabel: "trend" as const,
+          __gridLevel: levelIndex,
+        });
 
-        const [trendResult, ctResult] = await Promise.all([
-          submitOrderRef.current({
-            orderParams: trendLegParams,
-            gridsByWallet: pairConfig.trend.gridsByWallet,
-            estOrders: freshTrendEst,
-            areWalletsReady: pairConfig.trend.areWalletsReady,
-            category: "perpetual",
-            user,
-          }),
-          submitOrderRef.current({
-            orderParams: ctLegParams,
-            gridsByWallet: pairConfig.counterTrend.gridsByWallet,
-            estOrders: freshCtEst,
-            areWalletsReady: pairConfig.counterTrend.areWalletsReady,
-            category: "perpetual",
-            user,
-          }),
+        /** Submit a leg — either as a single order or as N grid-level orders. */
+        const submitLeg = async (
+          leg: PairTradingConfig["trend" | "counterTrend"],
+          legName: "trend" | "counterTrend",
+        ): Promise<Array<{ added: boolean; error: string | null }>> => {
+          const isGrid =
+            legName === "trend" &&
+            Boolean(leg.isGridEnabled) &&
+            (leg.gridNumber || 1) > 1;
+
+          // ── Non-grid leg: single submission ──
+          if (!isGrid) {
+            const params = buildNonGridLegParams(leg, legName);
+            const est = configurePerpOrderRef.current(params);
+            const res = await submitOrderRef.current({
+              orderParams: params,
+              gridsByWallet: leg.gridsByWallet,
+              estOrders: est,
+              areWalletsReady: leg.areWalletsReady,
+              category: "perpetual",
+              user,
+            });
+            return [res];
+          }
+
+          // ── Grid leg: compute every level then submit each independently ──
+          const { levels } = computePairGridPrices({
+            entryPriceStr: leg.entryPrice,
+            gridNumber: leg.gridNumber ?? 2,
+            gridDistance: leg.gridDistance ?? 10,
+            gridMultiplier: leg.gridMultiplier ?? 1,
+            collateralMultiplier: leg.collateralMultiplier ?? 2,
+            baseCollateral: Number(leg.initialOrderSize) || 0,
+            leverage: leg.leverage,
+            isLong: leg.isLong,
+          });
+          console.log(leg.isLong)
+
+          const results: Array<{ added: boolean; error: string | null }> = [];
+          for (let i = 0; i < levels.length; i++) {
+            const lvl = levels[i];
+            const params = buildGridLevelParams(
+              leg as PairTradingConfig["trend"],
+              i + 1,
+              lvl.price,
+              lvl.collateral,
+            );
+            const est = configurePerpOrderRef.current(params);
+            const res = await submitOrderRef.current({
+              orderParams: params,
+              gridsByWallet: leg.gridsByWallet,
+              estOrders: est,
+              areWalletsReady: leg.areWalletsReady,
+              category: "perpetual",
+              user,
+            });
+            results.push(res);
+            if (res.added !== true) break; // stop on first hard failure
+          }
+          return results;
+        };
+
+        const [trendResults, ctResults] = await Promise.all([
+          submitLeg(pairConfig.trend, "trend"),
+          submitLeg(pairConfig.counterTrend, "counterTrend"),
         ]);
 
-        if (trendResult.added === true && ctResult.added === true) {
+        const allAdded =
+          trendResults.every((r) => r.added === true) &&
+          ctResults.every((r) => r.added === true);
+
+        if (allAdded) {
           setOrderName("");
           setIsOrderNameValidate(false);
           setIsConfirmationOpen(false);
           setPairConfig(null);
         }
         return;
-
       }
 
+      // ── STANDARD SINGLE-STRATEGY PATH ─────────────────────────────────
       const entryType = getEntryType(technicalEntry);
       const orderParams = {
         gridNumber,
@@ -1103,7 +1263,6 @@ function PerpTradeBox({
     reEntranceLimit,
     slippage,
     leverage,
-    orderMode,
     isLong,
     protocol,
     feeToken,
@@ -1116,25 +1275,19 @@ function PerpTradeBox({
     isFeeExempt,
   ]);
 
-  // ========================================================================
-  // Order Configuration Effect
-  // ========================================================================
-
+  // ── Est orders regeneration for standard strategies ──────────────
   useEffect(() => {
+    if (isPairTrading) return;
+
     const shouldConfigureOrder = () => {
       if (selectedStrategy.id === "algo") {
-        if (!technicalEntry) {
-          return false;
-        }
+        if (!technicalEntry) return false;
       } else {
         if (selectedStrategy.id == "sellToken") {
-          if (Number(debouncedTpPrice) <= 0 || debouncedTpPrice === "") {
+          if (Number(debouncedTpPrice) <= 0 || debouncedTpPrice === "")
             return false;
-          }
         } else {
-          if (Number(entryPrice) <= 0 || entryPrice === "") {
-            return false;
-          }
+          if (Number(entryPrice) <= 0 || entryPrice === "") return false;
         }
       }
 
@@ -1151,9 +1304,7 @@ function PerpTradeBox({
 
     if (shouldConfigureOrder()) {
       const targetPx =
-        selectedStrategy.id === "sellToken"
-          ? tpPrice
-          : entryPrice;
+        selectedStrategy.id === "sellToken" ? tpPrice : entryPrice;
       const entryType = getEntryType(technicalEntry);
       const orderConfig: any = {
         gridNumber,
@@ -1169,9 +1320,7 @@ function PerpTradeBox({
         gridDistance,
         collateralToken,
         outputToken,
-        orderToken: {
-          ...tokenInfo
-        },
+        orderToken: { ...tokenInfo },
         priority,
         executionSpeed,
         orderName,
@@ -1190,17 +1339,17 @@ function PerpTradeBox({
         feeTokenPrice,
         collateralPrice,
         feeTokenRequired: showFeeTokenSelector,
-        user
+        user,
       };
-      // Call through the ref, not the hook value directly — this is what
-      // keeps configurePerpOrder's (possibly unstable) identity out of the
-      // dependency array below.
       const _estOrders = configurePerpOrderRef.current(orderConfig);
-      setEstOrders((prev) => (areOrderListsEqual(prev, _estOrders) ? prev : _estOrders));
+      setEstOrders((prev) =>
+        areOrderListsEqual(prev, _estOrders) ? prev : _estOrders,
+      );
     } else {
       setEstOrders((prev) => (prev.length === 0 ? prev : []));
     }
   }, [
+    isPairTrading,
     debouncedInitialOrderSize,
     debouncedEntryPrice,
     debouncedTpPrice,
@@ -1223,7 +1372,6 @@ function PerpTradeBox({
     feeTokenPrice,
     selectedStrategy,
     priority,
-    orderMode,
     executionSpeed,
     collateralPrice,
     isLong,
@@ -1239,7 +1387,7 @@ function PerpTradeBox({
     () => (
       <PerpAccountSelect
         protocol={protocol}
-        category={'perpetual'}
+        category={"perpetual"}
         orders={userPrevOrders}
         availableWallets={userWallets}
         gridsByWallet={gridsByWallet}
@@ -1276,12 +1424,10 @@ function PerpTradeBox({
     ],
   );
 
-  const showModeSelector = shouldCreateDemoTestnet(config.userLevels, user?.status);
-
-
-  // ========================================================================
-  // Render
-  // ========================================================================
+  const showModeSelector = shouldCreateDemoTestnet(
+    config.userLevels,
+    user?.status,
+  );
 
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-800 rounded-xl shadow-lg p-1 sm:p-3 lg:p-4 space-y-2 md:space-y-4 max-w-2xl mx-auto h-full flex flex-col">
@@ -1376,18 +1522,26 @@ function PerpTradeBox({
         )}
       </div>
 
-      <div className="w-full grow overflow-y-auto space-y-2 ">
-
-        {/* ── Mode selector row — shared by all strategies ─── */}
+      <div className="w-full grow overflow-y-auto space-y-2">
+        {/* Mode selector */}
         <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800 flex items-center justify-between">
           <div className="space-y-0.5">
-            <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-sm">Order Mode</h3>
-            <p className="text-xs text-gray-500 dark:text-gray-400">Live / Testnet / Demo</p>
+            <h3 className="font-semibold text-gray-800 dark:text-gray-100 text-sm">
+              Order Mode
+            </h3>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Live / Testnet / Demo
+            </p>
           </div>
-          <OrderModeSelector orderMode={orderMode} setOrderMode={setOrderMode} isSpot={false} isSupporteduser={showModeSelector} />
+          <OrderModeSelector
+            orderMode={orderMode}
+            setOrderMode={setOrderMode}
+            isSpot={false}
+            isSupporteduser={showModeSelector}
+          />
         </div>
 
-        {/* ── Order Name — shared by all strategies ─── */}
+        {/* Order name */}
         <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800">
           <OrderNameValidationInput
             name={orderName}
@@ -1398,7 +1552,7 @@ function PerpTradeBox({
           />
         </div>
 
-        {/* ── PAIR TRADING PATH ─── */}
+        {/* Pair Trading vs Standard */}
         {isPairTrading ? (
           <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800">
             <PairTradingPanel
@@ -1435,24 +1589,21 @@ function PerpTradeBox({
                 </div>
               </div>
 
-
               <div className="mb-2 md:mb-4">
                 <div className="bg-gray-50 dark:bg-gray-800 p-1 sm:p-1.5 rounded-xl flex gap-1 sm:gap-2 shadow-sm">
                   <button
-                    className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200
-            ${isLong
-                        ? "bg-green-500 text-white shadow-lg scale-[1.02] hover:bg-green-600"
-                        : "text-gray-600 hover:bg-gray-100/80"
+                    className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200 ${isLong
+                      ? "bg-green-500 text-white shadow-lg scale-[1.02] hover:bg-green-600"
+                      : "text-gray-600 hover:bg-gray-100/80"
                       }`}
                     onClick={() => setIsLong(true)}
                   >
                     Long Position
                   </button>
                   <button
-                    className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200
-            ${isLong === false
-                        ? "bg-red-500 text-white shadow-lg scale-[1.02] hover:bg-red-600"
-                        : "text-gray-600 hover:bg-gray-100/80"
+                    className={`flex-1 py-2 sm:py-3 rounded-lg font-medium text-sm sm:text-base transition-all duration-200 ${isLong === false
+                      ? "bg-red-500 text-white shadow-lg scale-[1.02] hover:bg-red-600"
+                      : "text-gray-600 hover:bg-gray-100/80"
                       }`}
                     onClick={() => setIsLong(false)}
                   >
@@ -1494,8 +1645,8 @@ function PerpTradeBox({
                 entryForLiquidationUsd > 0 && (
                   <div className="mt-3 p-3 rounded-lg border border-amber-200/80 dark:border-amber-700/50 bg-amber-50/80 dark:bg-amber-900/20">
                     <div className="text-xs font-medium text-amber-900 dark:text-amber-200">
-                      Est. liquidation (isolated, maint. {EST_PERP_MAINTENANCE_BPS}{" "}
-                      bps): $
+                      Est. liquidation (isolated, maint.{" "}
+                      {EST_PERP_MAINTENANCE_BPS} bps): $
                       {displayNumber(estLiquidationPriceUsd)}
                     </div>
                   </div>
@@ -1536,7 +1687,8 @@ function PerpTradeBox({
 
               <div className="space-y-1 md:space-y-2">
                 <label className="flex items-center text-sm font-medium text-gray-700 dark:text-gray-200">
-                  {Number(gridNumber) > 1 && orderSizeMultiplier > 1 && "Initial"} Order Size
+                  {Number(gridNumber) > 1 && orderSizeMultiplier > 1 && "Initial"}{" "}
+                  Order Size
                   <InfoTooltip
                     id="order-size-tooltip"
                     content="The initial size of your order"
@@ -1580,7 +1732,9 @@ function PerpTradeBox({
                         }`}
                     >
                       {estimatedUsdValue < PERP_MINIMUM_ORDER_SIZE && (
-                        <span className="mr-2">Min. order ${PERP_MINIMUM_ORDER_SIZE} USD</span>
+                        <span className="mr-2">
+                          Min. order ${PERP_MINIMUM_ORDER_SIZE} USD
+                        </span>
                       )}
                       ≈ $
                       {estimatedUsdValue.toLocaleString(undefined, {
@@ -1642,7 +1796,10 @@ function PerpTradeBox({
                     toolTipMessage="Percentage distance between each grid level"
                     value={gridDistance}
                     onChange={setGridDistance}
-                    notValid={Number(gridNumber) > 1 && (gridDistance === 0 || !gridDistance)}
+                    notValid={
+                      Number(gridNumber) > 1 &&
+                      (gridDistance === 0 || !gridDistance)
+                    }
                   />
                 </div>
                 {selectedStrategy.id != "dca" && (
@@ -1652,14 +1809,20 @@ function PerpTradeBox({
                       toolTipMessage="Multiplier for increasing grid size at each level"
                       value={gridMultiplier}
                       onChange={setGridMultiplier}
-                      notValid={Number(gridNumber) > 1 && (gridMultiplier === 0 || !gridMultiplier)}
+                      notValid={
+                        Number(gridNumber) > 1 &&
+                        (gridMultiplier === 0 || !gridMultiplier)
+                      }
                     />
                     <NumberInput
                       inputLabel="Collateral Multiplier"
                       toolTipMessage="Multiplier for increasing collateral at each grid level"
                       value={orderSizeMultiplier}
                       onChange={setOrderSizeMultiplier}
-                      notValid={Number(gridNumber) > 1 && (orderSizeMultiplier === 0 || !orderSizeMultiplier)}
+                      notValid={
+                        Number(gridNumber) > 1 &&
+                        (orderSizeMultiplier === 0 || !orderSizeMultiplier)
+                      }
                     />
                   </div>
                 )}
@@ -1756,7 +1919,9 @@ function PerpTradeBox({
             </button>
           )}
           <button
-            className={`grow py-3 md:py-4 ${!isPairTrading && estOrders.length > 0 ? "rounded-e-xl" : "rounded-xl"
+            className={`grow py-3 md:py-4 ${!isPairTrading && estOrders.length > 0
+              ? "rounded-e-xl"
+              : "rounded-xl"
               } bg-gray-50 dark:bg-gray-900 font-bold text-black dark:text-white transition-all transform hover:scale-[1.02] cursor-pointer`}
           >
             Connect Wallet
@@ -1776,13 +1941,19 @@ function PerpTradeBox({
             disabled={
               creationPending ||
               !readyToSubmitOrder ||
-              (isPairTrading ? false : (!areWalletsReady || estOrders.length === 0))
+              (isPairTrading
+                ? false
+                : !areWalletsReady || estOrders.length === 0)
             }
             onClick={() => setIsConfirmationOpen(true)}
-            className={`grow py-3 md:py-4 ${!isPairTrading && estOrders.length > 0 ? "rounded-e-xl" : "rounded-xl"
+            className={`grow py-3 md:py-4 ${!isPairTrading && estOrders.length > 0
+              ? "rounded-e-xl"
+              : "rounded-xl"
               } ${creationPending ||
                 !readyToSubmitOrder ||
-                (isPairTrading ? false : (!areWalletsReady || estOrders.length === 0))
+                (isPairTrading
+                  ? false
+                  : !areWalletsReady || estOrders.length === 0)
                 ? "bg-blue-200 dark:bg-blue-900/30 pointer-events-none opacity-50"
                 : "bg-blue-500 hover:bg-blue-600"
               } font-bold text-gray-800 dark:text-gray-50 transition-all transform hover:scale-[1.02] cursor-pointer`}
@@ -1791,7 +1962,6 @@ function PerpTradeBox({
           </button>
         </div>
       )}
-
 
       {openEstOrderModal && estOrders.length > 0 && (
         <EstSpotOrders

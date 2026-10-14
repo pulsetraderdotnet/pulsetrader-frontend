@@ -1,6 +1,7 @@
 "use client";
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatUnits } from "ethers";
 import {
   FiTrendingUp,
   FiChevronDown,
@@ -19,8 +20,12 @@ import ReEntranceInput from "./TradeBoxCommon/ReEntrance";
 import EntryPriceRendering from "./TradeBoxCommon/EntryPriceRendering";
 import TechnicalEntry from "./TradeBoxCommon/TechnicalEntry";
 import InfoTooltip from "./TradeBoxCommon/BoxTooltip";
+import GridInput from "./TradeBoxCommon/GridInput";
+import NumberInput from "./TradeBoxCommon/NumberInput";
 import PerpAccountSelect from "@/components/walletManager/selection/perpAccountSelect";
 import { useOrder } from "@/hooks/useOrder";
+import { getGridNthPrice } from "@/utility/orderUtility";
+import { safeParseUnits } from "@/utility/handy";
 
 import type { StableMarketTokenInfo } from "@/type/market";
 import type { OrderType, OrderTokenType } from "@/type/order";
@@ -40,6 +45,12 @@ export interface PairLegConfig {
   reEntranceLimit: number;
   slippage: number;
   technicalEntry: any;
+  // Grid config (trend leg only)
+  isGridEnabled?: boolean;
+  gridNumber?: number;
+  gridDistance?: number;
+  gridMultiplier?: number;
+  collateralMultiplier?: number;
   gridsByWallet: Record<number, any>;
   areWalletsReady: boolean;
   estOrders: OrderType[];
@@ -79,13 +90,38 @@ interface PairTradingPanelProps {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+export const calculateGridWeightsSum = (gridNumber: number, collateralMultiplier: number): number => {
+  const n = Math.max(1, Math.floor(gridNumber));
+  const m = Number(collateralMultiplier);
+  if (!Number.isFinite(m) || m <= 0 || m === 1) {
+    return n;
+  }
+  return (Math.pow(m, n) - 1) / (m - 1);
+};
+
+export const isNegativeGridDrop = (isLong: boolean, distance: number, num: number, mult: number): boolean => {
+  if (!isLong) return false;
+  if (distance > 0 && num > 1 && mult > 0) {
+    if (mult === 1) {
+      return distance * (num - 1) >= 100;
+    }
+    const firstCal = mult ** (num - 1) - 1;
+    const secoundCal = firstCal / (mult - 1);
+    const lastPercentage = distance * secoundCal;
+    if (lastPercentage >= 100) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const createDefaultLeg = (isLong: boolean): PairLegConfig => ({
   isLong,
   leverage: 5,
   initialOrderSize: "",
   entryPrice: "",
   tpPercentage: isLong ? 30 : 5,
-  slPercentage: isLong ? 50 : 3,
+  slPercentage: isLong ? 50 : 40,
   isActiveStopLoss: true,
   isTrailingMode: false,
   isReEntrance: !isLong,
@@ -96,8 +132,13 @@ const createDefaultLeg = (isLong: boolean): PairLegConfig => ({
     metric: "rsi",
     timeframe: "1m",
     period: 14,
-    value: String(isLong ? 35 : 85),
+    value: String(isLong ? 35 : 70),
   },
+  isGridEnabled: false,
+  gridNumber: 2,
+  gridDistance: 10,
+  gridMultiplier: 1,
+  collateralMultiplier: 2,
   gridsByWallet: {},
   areWalletsReady: false,
   estOrders: [],
@@ -111,6 +152,210 @@ const areOrderListsEqual = (a: OrderType[], b: OrderType[]) => {
   } catch {
     return false;
   }
+};
+
+// ─── Grid price computation ───────────────────────────────────────────────────
+
+export interface GridPriceLevel {
+  index: number;        // 1-based grid number
+  multiplier: number;   // collateral multiplier at this level (1x, 2x, 4x, ...)
+  collateral: number;   // margin for this level, in collateral units
+  positionSize: number; // collateral × leverage
+  price: number;        // target entry price for this level
+  priceStr: string;     // pretty-printed price (4 dp, or "--")
+}
+
+/**
+ * Compute per-level grid price, collateral and position size.
+ *
+ * Uses `getGridNthPrice` from orderUtility so the numbers here match
+ * exactly what the order-execution pipeline generates.
+ */
+export const computePairGridPrices = ({
+  entryPriceStr,
+  gridNumber,
+  gridDistance,
+  gridMultiplier,
+  collateralMultiplier,
+  baseCollateral,
+  leverage,
+  isLong,
+}: {
+  entryPriceStr: string;
+  gridNumber: number;
+  gridDistance: number;
+  gridMultiplier: number;
+  collateralMultiplier: number;
+  baseCollateral: number;
+  leverage: number;
+  isLong: boolean;
+}): { levels: GridPriceLevel[]; totalCollateral: number } => {
+  const num = Math.max(1, Math.min(Math.floor(gridNumber || 1), 50));
+  const dist = Number(gridDistance) > 0 ? Number(gridDistance) : 10;
+  const mult = Number(gridMultiplier) > 0 ? Number(gridMultiplier) : 1;
+  const colMult = Number(collateralMultiplier) > 0 ? Number(collateralMultiplier) : 1;
+  const base = Number(baseCollateral) || 0;
+  const lev = Number(leverage) || 1;
+
+  // Scale entry price once; reuse across all grid levels.
+  const hasEntry = Boolean(entryPriceStr) && Number(entryPriceStr) > 0;
+  const entryBig = hasEntry ? safeParseUnits(String(entryPriceStr), 18) : BigInt(0);
+
+  const levels: GridPriceLevel[] = [];
+  let runningMultiplier = 1;
+  let totalCollateral = 0;
+
+  for (let i = 1; i <= num; i++) {
+    const gridCollateral = base * runningMultiplier;
+    const positionSize = gridCollateral * lev;
+    totalCollateral += gridCollateral;
+
+    let price = 0;
+    if (hasEntry) {
+      const nthBig = getGridNthPrice({
+        entryPrice: entryBig,
+        gridDistance: dist,
+        gridMultiplier: mult,
+        n: i,
+        decrement: isLong, // long → grids descend; short → ascend
+      });
+      price = Number(formatUnits(nthBig, 18));
+    }
+
+    levels.push({
+      index: i,
+      multiplier: runningMultiplier,
+      collateral: gridCollateral,
+      positionSize,
+      price,
+      priceStr: price > 0 ? price.toFixed(4) : "--",
+    });
+
+    runningMultiplier *= colMult;
+  }
+
+  return { levels, totalCollateral };
+};
+
+// ─── Grid Collateral Preview Sub-component ───────────────────────────────────
+
+const GridCollateralPreview = ({
+  gridNumber,
+  gridDistance,
+  gridMultiplier,
+  collateralMultiplier,
+  baseCollateral,
+  leverage,
+  isLong,
+  entryPrice,
+  collateralSymbol,
+}: {
+  gridNumber: number;
+  gridDistance: number;
+  gridMultiplier: number;
+  collateralMultiplier: number;
+  baseCollateral: number;
+  leverage: number;
+  isLong: boolean;
+  entryPrice: string;
+  collateralSymbol?: string;
+}) => {
+  const { levels, totalCollateral } = useMemo(
+    () =>
+      computePairGridPrices({
+        entryPriceStr: entryPrice,
+        gridNumber,
+        gridDistance,
+        gridMultiplier,
+        collateralMultiplier,
+        baseCollateral,
+        leverage,
+        isLong,
+      }),
+    [
+      entryPrice,
+      gridNumber,
+      gridDistance,
+      gridMultiplier,
+      collateralMultiplier,
+      baseCollateral,
+      leverage,
+      isLong,
+    ],
+  );
+
+  if (gridNumber < 2 || baseCollateral <= 0) return null;
+
+  return (
+    <div className="mt-3 p-3 rounded-lg bg-gray-50 dark:bg-[#1a1f26] border border-gray-200 dark:border-gray-800 space-y-2">
+      <div className="flex items-center justify-between text-xs">
+        <span className="font-semibold text-gray-700 dark:text-gray-300">
+          Grid Orders Breakdown ({levels.length} orders)
+        </span>
+        <span className="text-gray-500 dark:text-gray-400">
+          Total:{" "}
+          <span className="font-bold text-violet-600 dark:text-violet-400">
+            {totalCollateral.toFixed(2)} {collateralSymbol}
+          </span>
+        </span>
+      </div>
+
+      <div className="overflow-x-auto max-h-48 overflow-y-auto">
+        <table className="w-full text-[11px] text-left">
+          <thead className="text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+            <tr>
+              <th className="py-1 px-1.5 font-medium">#</th>
+              <th className="py-1 px-1.5 font-medium">Target Price</th>
+              <th className="py-1 px-1.5 font-medium text-right">
+                Margin ({collateralSymbol})
+              </th>
+              <th className="py-1 px-1.5 font-medium text-right">
+                Size ({collateralSymbol})
+              </th>
+              <th className="py-1 px-1.5 font-medium text-right">Scale</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+            {levels.map((lvl) => (
+              <tr
+                key={lvl.index}
+                className="text-gray-700 dark:text-gray-300 hover:bg-gray-100/50 dark:hover:bg-gray-800/40"
+              >
+                <td className="py-1 px-1.5 font-semibold">#{lvl.index}</td>
+                <td className="py-1 px-1.5 font-mono">
+                  {lvl.index === 1 ? (
+                    <span className="text-gray-900 dark:text-white">
+                      {lvl.priceStr}
+                      <span className="text-[9px] text-gray-500 ml-1">(entry)</span>
+                    </span>
+                  ) : (
+                    <span
+                      className={
+                        isLong
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : "text-rose-600 dark:text-rose-400"
+                      }
+                    >
+                      {lvl.priceStr}
+                    </span>
+                  )}
+                </td>
+                <td className="py-1 px-1.5 text-right font-mono">
+                  {lvl.collateral.toFixed(2)}
+                </td>
+                <td className="py-1 px-1.5 text-right font-mono text-violet-600 dark:text-violet-400">
+                  {lvl.positionSize.toFixed(2)}
+                </td>
+                <td className="py-1 px-1.5 text-right text-gray-400">
+                  {lvl.multiplier}x
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 };
 
 // ─── Single Leg Sub-component ─────────────────────────────────────────────────
@@ -133,7 +378,6 @@ interface LegPanelProps {
   isFeeExempt: boolean;
   feeToken?: OrderTokenType | null;
   isAdvancedSymbol: boolean;
-
   config: PairTradingPanelProps["config"];
 }
 
@@ -158,12 +402,6 @@ const LegPanel = memo(function LegPanel({
   config,
 }: LegPanelProps) {
   const [isExpanded, setIsExpanded] = useState(true);
-
-  const maxLeverage = useMemo(() => {
-    const parsed = Number(tokenInfo?.maxLeverage);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 50;
-    return Math.max(1, parsed);
-  }, [tokenInfo?.maxLeverage]);
 
   const setGridsByWallet = useCallback(
     (v: Record<number, any>) => onChange({ gridsByWallet: v }),
@@ -215,11 +453,11 @@ const LegPanel = memo(function LegPanel({
 
       {isExpanded && (
         <div className="p-4 space-y-4">
-
           {/* Direction toggle */}
           <div>
             <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-1 block">
-              Direction {!isTrend && <span className="text-amber-400">(auto-synced)</span>}
+              Direction{" "}
+              {!isTrend && <span className="text-amber-400">(auto-synced)</span>}
             </label>
             <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
               <button
@@ -273,7 +511,9 @@ const LegPanel = memo(function LegPanel({
           {/* Entry: algo for CT, price for trend */}
           {!isTrend ? (
             <div>
-              <label className={`flex items-center gap-1 text-xs font-semibold uppercase tracking-widest mb-1 ${accentColor}`}>
+              <label
+                className={`flex items-center gap-1 text-xs font-semibold uppercase tracking-widest mb-1 ${accentColor}`}
+              >
                 <FiZap className="w-3 h-3" /> CT Algo Entry
                 <InfoTooltip
                   id="ct-algo-entry-tooltip"
@@ -298,9 +538,85 @@ const LegPanel = memo(function LegPanel({
             />
           )}
 
+          {/* Grid Configuration — Trend only */}
+          {isTrend && (
+            <div className="p-3 bg-gray-100/70 dark:bg-gray-800/60 rounded-xl border border-gray-200 dark:border-gray-700/60 space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="flex items-center gap-1 text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-widest">
+                  Trend Grid Orders
+                  <InfoTooltip
+                    id="trend-grid-toggle-tooltip"
+                    content="Split trend collateral across multiple grid entries with geometric collateral scaling"
+                  />
+                </label>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(leg.isGridEnabled)}
+                    onChange={(e) => onChange({ isGridEnabled: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-violet-300 dark:peer-focus:ring-violet-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-gray-600 peer-checked:bg-violet-600"></div>
+                </label>
+              </div>
 
+              {leg.isGridEnabled && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <GridInput
+                      gridValue={leg.gridNumber ?? 2}
+                      onChange={(v) => onChange({ gridNumber: v })}
+                      user={user}
+                      maxGridNumber={config?.maxGridNumber || 10}
+                    />
+                    <NumberInput
+                      inputLabel="Grid Distance"
+                      toolTipMessage="Percentage distance between each grid level"
+                      value={leg.gridDistance ?? 10}
+                      onChange={(v) => onChange({ gridDistance: v })}
+                      notValid={
+                        leg.isGridEnabled && (!leg.gridDistance || leg.gridDistance <= 0)
+                      }
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <NumberInput
+                      inputLabel="Grid Multiplier"
+                      toolTipMessage="Multiplier for increasing grid distance at each level"
+                      value={leg.gridMultiplier ?? 1}
+                      onChange={(v) => onChange({ gridMultiplier: v })}
+                      notValid={
+                        leg.isGridEnabled && (!leg.gridMultiplier || leg.gridMultiplier <= 0)
+                      }
+                    />
+                    <NumberInput
+                      inputLabel="Collateral Multiplier"
+                      toolTipMessage="Multiplier for increasing collateral at each grid level (e.g. 2 means 2x, 4x, etc.)"
+                      value={leg.collateralMultiplier ?? 2}
+                      onChange={(v) => onChange({ collateralMultiplier: v })}
+                      notValid={
+                        leg.isGridEnabled &&
+                        (!leg.collateralMultiplier || leg.collateralMultiplier <= 0)
+                      }
+                    />
+                  </div>
 
-          {/* TP/SL */}
+                  <GridCollateralPreview
+                    gridNumber={leg.gridNumber ?? 2}
+                    gridDistance={leg.gridDistance ?? 10}
+                    gridMultiplier={leg.gridMultiplier ?? 1}
+                    collateralMultiplier={leg.collateralMultiplier ?? 2}
+                    baseCollateral={Number(leg.initialOrderSize) || 0}
+                    leverage={leg.leverage}
+                    isLong={leg.isLong}
+                    entryPrice={leg.entryPrice}
+                    collateralSymbol={collateralToken?.symbol}
+                  />
+                </>
+              )}
+            </div>
+          )}
+
           <TakeProfitInput
             takeProfitPercentage={leg.tpPercentage}
             onTakeProfitPercentageChange={(v) => onChange({ tpPercentage: v })}
@@ -310,8 +626,8 @@ const LegPanel = memo(function LegPanel({
             }
             initialOrderSize={leg.initialOrderSize}
             collateralToken={collateralToken}
-            trailingMode={label === 'Trend Order' ? false : true}
-            additionalLabel={`${label === 'Trend Order' ? 'Net Hedge TP' : ''}`}
+            trailingMode={label === "Trend Order" ? false : true}
+            additionalLabel={`${label === "Trend Order" ? "Net Hedge TP" : "TP"}`}
           />
 
           <StopLossInput
@@ -321,20 +637,19 @@ const LegPanel = memo(function LegPanel({
             stopLossPercentage={leg.slPercentage}
             setStopLossPercentage={(v) => onChange({ slPercentage: v })}
             notValid={leg.isTrailingMode && leg.slPercentage === 0}
-            additionalLabel={`${label === 'Trend Order' ? 'Net Hedge SL' : ''}`}
+            additionalLabel={`${label === "Trend Order" ? "Net Hedge SL" : "SL"}`}
           />
 
           <SlippageInput slippage={leg.slippage} onChange={(v) => onChange({ slippage: v })} />
 
-          {
-            label != 'Trend Order' && <ReEntranceInput
+          {label !== "Trend Order" && (
+            <ReEntranceInput
               isReEntrance={leg.isReEntrance}
               setIsReEntrance={(v) => onChange({ isReEntrance: v })}
               reEntranceLimit={leg.reEntranceLimit}
               setReEntranceLimit={(v) => onChange({ reEntranceLimit: v })}
             />
-          }
-
+          )}
 
           {/* Wallet Selector */}
           {user?.account && (
@@ -403,55 +718,82 @@ export default memo(function PairTradingPanel({
   const [trendLeverage, setTrendLeverage] = useState<number>(1);
   const [leverageRatio, setLeverageRatio] = useState<number>(5);
 
+  // ── Build configurePerpOrder config for a leg ──────────────────────────
+  const buildLegOrderConfig = useCallback(
+    (leg: PairLegConfig, lev: number, orderLabel?: "trend" | "counterTrend") => {
+      const currentPrice = liveTokenPriceUsd || tokenInfo?.priceUsd || "0";
+      const targetPrice =
+        leg.entryPrice && Number(leg.entryPrice) > 0 ? leg.entryPrice : currentPrice;
+      const isGrid =
+        orderLabel === "trend" &&
+        Boolean(leg.isGridEnabled) &&
+        (leg.gridNumber || 1) > 1;
 
-  // Helper: build configurePerpOrder config for a leg
-  const buildLegOrderConfig = useCallback((leg: PairLegConfig, lev: number, orderLabel?: "trend" | "counterTrend") => {
-    const currentPrice = liveTokenPriceUsd || tokenInfo?.priceUsd || "0";
-    const targetPrice = leg.entryPrice && Number(leg.entryPrice) > 0 ? leg.entryPrice : currentPrice;
-    return {
-      gridNumber: 1,
-      targetPrice,
-      activeStopLoss: leg.isActiveStopLoss,
-      entryLogic: leg.technicalEntry && !(leg.technicalEntry as any).targetWeight ? leg.technicalEntry : null,
-      entryWeight: leg.technicalEntry && (leg.technicalEntry as any).targetWeight ? leg.technicalEntry : null,
-      entryType: leg.technicalEntry
-        ? ((leg.technicalEntry as any).targetWeight ? "weight" : "logic")
-        : "price",
-      mode: orderMode,
-      orderSizeMultiplier: 1,
-      initialOrderSize: leg.initialOrderSize || "0",
-      gridMultiplier: 1,
-      gridDistance: 1,
-      collateralToken,
-      outputToken: collateralToken,  // perp: output token is same as collateral
-      orderToken: tokenInfo,
-      priority: 1,
-      executionSpeed: "normal",
-      orderName,
-      strategy: "pairTrading",
-      chainId,
-      isTrailingMode: leg.isTrailingMode,
-      tpPrice: "",
-      tpPercentage: leg.tpPercentage,
-      slPercentage: leg.slPercentage,
-      isReEntrance: leg.isReEntrance,
-      reEntranceLimit: leg.reEntranceLimit,
-      slippage: leg.slippage,
-      leverage: lev,
-      isLong: leg.isLong,
-      protocol,
-      feeToken: isFeeExempt ? null : feeToken,
-      user,
-      orderLabel,
-      orderLable: orderLabel,
-      additional: {
+      return {
+        gridNumber: isGrid ? leg.gridNumber || 1 : 1,
+        targetPrice,
+        activeStopLoss: leg.isActiveStopLoss,
+        entryLogic:
+          leg.technicalEntry && !(leg.technicalEntry as any).targetWeight
+            ? leg.technicalEntry
+            : null,
+        entryWeight:
+          leg.technicalEntry && (leg.technicalEntry as any).targetWeight
+            ? leg.technicalEntry
+            : null,
+        entryType: leg.technicalEntry
+          ? (leg.technicalEntry as any).targetWeight
+            ? "weight"
+            : "logic"
+          : "price",
+        mode: orderMode,
+        orderSizeMultiplier: isGrid ? leg.collateralMultiplier || 1 : 1,
+        initialOrderSize: leg.initialOrderSize || "0",
+        gridMultiplier: isGrid ? leg.gridMultiplier || 1 : 1,
+        gridDistance: isGrid ? leg.gridDistance || 10 : 10,
+        collateralToken,
+        outputToken: collateralToken,
+        orderToken: tokenInfo,
+        priority: 1,
+        executionSpeed: "normal",
+        orderName,
+        strategy: "pairTrading",
+        chainId,
+        isTrailingMode: leg.isTrailingMode,
+        tpPrice: "",
+        tpPercentage: leg.tpPercentage,
+        slPercentage: leg.slPercentage,
+        isReEntrance: leg.isReEntrance,
+        reEntranceLimit: leg.reEntranceLimit,
+        slippage: leg.slippage,
+        leverage: lev,
+        isLong: leg.isLong,
+        protocol,
+        feeToken: isFeeExempt ? null : feeToken,
+        user,
         orderLabel,
         orderLable: orderLabel,
-      },
-    };
-  }, [orderMode, collateralToken, tokenInfo, orderName, chainId, protocol, feeToken, isFeeExempt, user, liveTokenPriceUsd]);
+        additional: {
+          orderLabel,
+          orderLable: orderLabel,
+        },
+      };
+    },
+    [
+      orderMode,
+      collateralToken,
+      tokenInfo,
+      orderName,
+      chainId,
+      protocol,
+      feeToken,
+      isFeeExempt,
+      user,
+      liveTokenPriceUsd,
+    ],
+  );
 
-  // ── Resolved max leverage from tokenInfo ────────────────────────────────
+  // ── Max leverage from tokenInfo ────────────────────────────────────────
   const maxLeverage = useMemo(() => {
     const parsed = Number(tokenInfo?.maxLeverage);
     if (!Number.isFinite(parsed) || parsed <= 0) return 50;
@@ -465,21 +807,32 @@ export default memo(function PairTradingPanel({
     }
   }, [maxLeverage, trendLeverage]);
 
-  // Calculate and sync margins & leverages based on total collateral and ratio
+  // Sync margins & leverages based on total collateral and ratio
   useEffect(() => {
     const collat = Number(totalCollateral) || 0;
     const ratio = leverageRatio || 1;
 
-    // To have equal position sizes: C_T * L_T = C_C * (L_T * ratio)
-    // => C_T = C_C * ratio
-    // C_Total = C_T + C_C = C_C * ratio + C_C = C_C * (ratio + 1)
+    // Equal position sizes: C_T * L_T = C_C * (L_T * ratio)
+    //                    ⇒ C_T = C_C * ratio
+    //                    ⇒ C_Total = C_C * (ratio + 1)
     const ctMargin = collat / (ratio + 1);
     const trendMargin = collat - ctMargin;
-    // Clamp CT leverage to maxLeverage
+
+    // CT leverage = trend leverage × ratio, clamped to maxLeverage
     const rawCtLev = trendLeverage * ratio;
     const ctLev = Math.min(rawCtLev, maxLeverage);
 
-    const trendOrderSize = trendMargin > 0 ? trendMargin.toFixed(4) : "";
+    const isGrid = Boolean(trendLeg.isGridEnabled) && (trendLeg.gridNumber ?? 2) > 1;
+    let baseGridMargin = trendMargin;
+    if (isGrid && trendMargin > 0) {
+      const weightSum = calculateGridWeightsSum(
+        trendLeg.gridNumber ?? 2,
+        trendLeg.collateralMultiplier ?? 2,
+      );
+      baseGridMargin = trendMargin / weightSum;
+    }
+
+    const trendOrderSize = baseGridMargin > 0 ? baseGridMargin.toFixed(4) : "";
     const ctOrderSize = ctMargin > 0 ? ctMargin.toFixed(4) : "";
 
     setTrendLeg((prev) => ({
@@ -493,7 +846,15 @@ export default memo(function PairTradingPanel({
       leverage: ctLev,
       initialOrderSize: ctOrderSize,
     }));
-  }, [totalCollateral, trendLeverage, leverageRatio, maxLeverage]);
+  }, [
+    totalCollateral,
+    trendLeverage,
+    leverageRatio,
+    maxLeverage,
+    trendLeg.isGridEnabled,
+    trendLeg.gridNumber,
+    trendLeg.collateralMultiplier,
+  ]);
 
   // Seed entry price when token changes
   useEffect(() => {
@@ -537,6 +898,41 @@ export default memo(function PairTradingPanel({
     if (trendLeg.slippage <= 0.4)
       return { isReady: false, notReadyReason: "Trend slippage must be > 0.4" };
 
+    if (trendLeg.isGridEnabled) {
+      const gridNum = trendLeg.gridNumber ?? 2;
+      const gridDist = trendLeg.gridDistance ?? 10;
+      const gridMult = trendLeg.gridMultiplier ?? 1;
+      const colMult = trendLeg.collateralMultiplier ?? 2;
+
+      if (gridNum < 2)
+        return {
+          isReady: false,
+          notReadyReason: "Grid number must be ≥ 2 when grid is enabled",
+        };
+      if (gridDist <= 0)
+        return { isReady: false, notReadyReason: "Grid distance must be > 0" };
+      if (gridMult <= 0)
+        return { isReady: false, notReadyReason: "Grid multiplier must be > 0" };
+      if (colMult <= 0)
+        return {
+          isReady: false,
+          notReadyReason: "Collateral multiplier must be > 0",
+        };
+
+      if (isNegativeGridDrop(trendLeg.isLong, gridDist, gridNum, gridMult)) {
+        return { isReady: false, notReadyReason: "Grid price cannot be 0 or negative" };
+      }
+
+      const minCollateral = Number(trendLeg.initialOrderSize) || 0;
+      if (config?.minimumOrderSize && minCollateral < config.minimumOrderSize) {
+        return {
+          isReady: false,
+          notReadyReason: `Smallest grid order (${minCollateral.toFixed(2)} ${collateralToken?.symbol || ""
+            }) is below minimum (${config.minimumOrderSize})`,
+        };
+      }
+    }
+
     if (!ctLeg.initialOrderSize || Number(ctLeg.initialOrderSize) <= 0)
       return { isReady: false, notReadyReason: "Set CT leg margin" };
     if (!ctLeg.technicalEntry)
@@ -549,9 +945,15 @@ export default memo(function PairTradingPanel({
       return { isReady: false, notReadyReason: "CT slippage must be > 0.4" };
 
     if (trendLeg.leverage > maxLeverage)
-      return { isReady: false, notReadyReason: `Trend leverage (${trendLeg.leverage}x) exceeds max allowed (${maxLeverage}x)` };
+      return {
+        isReady: false,
+        notReadyReason: `Trend leverage (${trendLeg.leverage}x) exceeds max allowed (${maxLeverage}x)`,
+      };
     if (ctLeg.leverage > maxLeverage)
-      return { isReady: false, notReadyReason: `CT leverage (${ctLeg.leverage}x) exceeds max allowed (${maxLeverage}x)` };
+      return {
+        isReady: false,
+        notReadyReason: `CT leverage (${ctLeg.leverage}x) exceeds max allowed (${maxLeverage}x)`,
+      };
 
     if (!trendLeg.areWalletsReady)
       return { isReady: false, notReadyReason: "Select trend wallet" };
@@ -561,7 +963,10 @@ export default memo(function PairTradingPanel({
     const trendWalletId = Object.values(trendLeg.gridsByWallet)?.[0]?._id;
     const ctWalletId = Object.values(ctLeg.gridsByWallet)?.[0]?._id;
     if (trendWalletId && ctWalletId && trendWalletId === ctWalletId)
-      return { isReady: false, notReadyReason: "Trend & CT wallets must be different" };
+      return {
+        isReady: false,
+        notReadyReason: "Trend & CT wallets must be different",
+      };
 
     if (trendLeg.isLong === ctLeg.isLong)
       return { isReady: false, notReadyReason: "Legs must have opposite directions" };
@@ -570,7 +975,15 @@ export default memo(function PairTradingPanel({
       return { isReady: false, notReadyReason: "Connect your wallet" };
 
     return { isReady: true, notReadyReason: "" };
-  }, [orderName, trendLeg, ctLeg, isConnected, maxLeverage]);
+  }, [
+    orderName,
+    trendLeg,
+    ctLeg,
+    isConnected,
+    maxLeverage,
+    config?.minimumOrderSize,
+    collateralToken?.symbol,
+  ]);
 
   // ── Propagate config to parent ─────────────────────────────────────────
   const onConfigChangeRef = useRef(onConfigChange);
@@ -596,34 +1009,56 @@ export default memo(function PairTradingPanel({
       const hasTrendSize = Number(trendLeg.initialOrderSize) > 0;
       const hasCtSize = Number(ctLeg.initialOrderSize) > 0;
 
-      const trendEst = hasTrendSize && Number(trendPrice) > 0
-        ? configurePerpOrderRef.current(buildLegOrderConfig({ ...trendLeg, entryPrice: trendPrice }, trendLeg.leverage, "trend"))
-        : [];
-      const ctEst = hasCtSize && (ctLeg.technicalEntry || Number(ctPrice) > 0)
-        ? configurePerpOrderRef.current(buildLegOrderConfig({ ...ctLeg, entryPrice: ctPrice }, ctLeg.leverage, "counterTrend"))
-        : [];
+      const trendEst =
+        hasTrendSize && Number(trendPrice) > 0
+          ? configurePerpOrderRef.current(
+            buildLegOrderConfig({ ...trendLeg, entryPrice: trendPrice }, trendLeg.leverage, "trend"),
+          )
+          : [];
+      const ctEst =
+        hasCtSize && (ctLeg.technicalEntry || Number(ctPrice) > 0)
+          ? configurePerpOrderRef.current(
+            buildLegOrderConfig({ ...ctLeg, entryPrice: ctPrice }, ctLeg.leverage, "counterTrend"),
+          )
+          : [];
 
-      // Store on the legs too so submit logic can read them directly
+      // Store on the legs so submit logic can read them directly
       setTrendLeg((prev) =>
-        areOrderListsEqual(prev.estOrders, trendEst) ? prev : { ...prev, estOrders: trendEst }
+        areOrderListsEqual(prev.estOrders, trendEst) ? prev : { ...prev, estOrders: trendEst },
       );
       setCtLeg((prev) =>
-        areOrderListsEqual(prev.estOrders, ctEst) ? prev : { ...prev, estOrders: ctEst }
+        areOrderListsEqual(prev.estOrders, ctEst) ? prev : { ...prev, estOrders: ctEst },
       );
-      // Push combined list to parent for the order preview table
+      // Push combined list to parent for the preview table
       setEstOrdersRef.current([...trendEst, ...ctEst]);
     } catch (e) {
-      // configurePerpOrder can throw if required fields are missing; ignore until form is complete
       console.warn("PairTrading estOrders generation error:", e);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    trendLeg.initialOrderSize, trendLeg.entryPrice, trendLeg.isLong, trendLeg.leverage,
-    trendLeg.tpPercentage, trendLeg.slPercentage, trendLeg.isTrailingMode,
-    trendLeg.slippage, trendLeg.technicalEntry,
-    ctLeg.initialOrderSize, ctLeg.entryPrice, ctLeg.isLong, ctLeg.leverage,
-    ctLeg.tpPercentage, ctLeg.slPercentage, ctLeg.isTrailingMode,
-    ctLeg.slippage, ctLeg.technicalEntry,
+    trendLeg.initialOrderSize,
+    trendLeg.entryPrice,
+    trendLeg.isLong,
+    trendLeg.leverage,
+    trendLeg.tpPercentage,
+    trendLeg.slPercentage,
+    trendLeg.isTrailingMode,
+    trendLeg.slippage,
+    trendLeg.technicalEntry,
+    trendLeg.isGridEnabled,
+    trendLeg.gridNumber,
+    trendLeg.gridDistance,
+    trendLeg.gridMultiplier,
+    trendLeg.collateralMultiplier,
+    ctLeg.initialOrderSize,
+    ctLeg.entryPrice,
+    ctLeg.isLong,
+    ctLeg.leverage,
+    ctLeg.tpPercentage,
+    ctLeg.slPercentage,
+    ctLeg.isTrailingMode,
+    ctLeg.slippage,
+    ctLeg.technicalEntry,
     buildLegOrderConfig,
     liveTokenPriceUsd,
     tokenInfo?.priceUsd,
@@ -634,13 +1069,43 @@ export default memo(function PairTradingPanel({
 
   const trendAvailableWallets = useMemo(() => {
     if (!ctSelectedWalletId) return userWallets;
-    return userWallets.filter(w => w._id !== ctSelectedWalletId);
+    return userWallets.filter((w) => w._id !== ctSelectedWalletId);
   }, [userWallets, ctSelectedWalletId]);
 
   const ctAvailableWallets = useMemo(() => {
     if (!trendSelectedWalletId) return userWallets;
-    return userWallets.filter(w => w._id !== trendSelectedWalletId);
+    return userWallets.filter((w) => w._id !== trendSelectedWalletId);
   }, [userWallets, trendSelectedWalletId]);
+
+  // ── Split-info values for the summary card ────────────────────────────
+  const trendSplit = useMemo(() => {
+    const isGrid = Boolean(trendLeg.isGridEnabled) && (trendLeg.gridNumber || 1) > 1;
+    const base = Number(trendLeg.initialOrderSize) || 0;
+    if (isGrid) {
+      const { totalCollateral } = computePairGridPrices({
+        entryPriceStr: trendLeg.entryPrice,
+        gridNumber: trendLeg.gridNumber ?? 2,
+        gridDistance: trendLeg.gridDistance ?? 10,
+        gridMultiplier: trendLeg.gridMultiplier ?? 1,
+        collateralMultiplier: trendLeg.collateralMultiplier ?? 2,
+        baseCollateral: base,
+        leverage: trendLeg.leverage,
+        isLong: trendLeg.isLong,
+      });
+      return { isGrid: true, total: totalCollateral, base };
+    }
+    return { isGrid: false, total: base, base };
+  }, [
+    trendLeg.isGridEnabled,
+    trendLeg.gridNumber,
+    trendLeg.gridDistance,
+    trendLeg.gridMultiplier,
+    trendLeg.collateralMultiplier,
+    trendLeg.initialOrderSize,
+    trendLeg.entryPrice,
+    trendLeg.leverage,
+    trendLeg.isLong,
+  ]);
 
   return (
     <div className="space-y-3">
@@ -659,7 +1124,9 @@ export default memo(function PairTradingPanel({
 
       {/* ── Pair Configuration (Auto-Split) ── */}
       <div className="bg-gray-50 dark:bg-gray-900 p-3 2xl:p-4 rounded-xl border border-gray-100 dark:border-gray-800 space-y-4">
-        <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-100">Pair Configuration (Auto-Split)</h4>
+        <h4 className="text-sm font-semibold text-gray-800 dark:text-gray-100">
+          Pair Configuration (Auto-Split)
+        </h4>
 
         {/* Total Collateral */}
         <div>
@@ -694,7 +1161,7 @@ export default memo(function PairTradingPanel({
           </div>
         </div>
 
-        <div className="grid  gap-4">
+        <div className="grid gap-4">
           {/* Trend Leverage */}
           <div>
             <LeverageInput
@@ -728,16 +1195,38 @@ export default memo(function PairTradingPanel({
           </div>
         </div>
 
-        {/* Display Split Info */}
+        {/* Split Info */}
         {Number(totalCollateral) > 0 && (
           <div className="flex gap-2 text-xs font-medium mt-2">
             <div className="flex-1 bg-violet-50 dark:bg-violet-900/20 text-violet-700 dark:text-violet-300 p-2 rounded-lg border border-violet-200 dark:border-violet-700/40">
               <span className="opacity-80">Trend Leg:</span> <br />
-              {Number(trendLeg.initialOrderSize).toFixed(2)} {collateralToken?.symbol} @ {trendLeg.leverage}x
+              {trendSplit.isGrid ? (
+                <>
+                  <span className="font-semibold">
+                    {trendSplit.total.toFixed(2)} {collateralToken?.symbol}
+                  </span>{" "}
+                  @ {trendLeg.leverage}x
+                  <div className="text-[10px] opacity-80 mt-0.5">
+                    ({trendLeg.gridNumber} grids: base {trendSplit.base.toFixed(2)}{" "}
+                    {collateralToken?.symbol}, {trendLeg.collateralMultiplier}x mult)
+                  </div>
+                </>
+              ) : (
+                <>
+                  {trendSplit.total.toFixed(2)} {collateralToken?.symbol} @{" "}
+                  {trendLeg.leverage}x
+                </>
+              )}
             </div>
             <div className="flex-1 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 p-2 rounded-lg border border-amber-200 dark:border-amber-700/40">
               <span className="opacity-80">CT Leg:</span> <br />
-              {Number(ctLeg.initialOrderSize).toFixed(2)} {collateralToken?.symbol} @ {ctLeg.leverage}x
+              {Number(ctLeg.initialOrderSize).toFixed(2)} {collateralToken?.symbol} @{" "}
+              {ctLeg.leverage}x
+              {trendLeg.isGridEnabled && (trendLeg.gridNumber || 1) > 1 && (
+                <div className="text-[10px] opacity-80 mt-0.5">
+                  (runtime size matches trend #1 position)
+                </div>
+              )}
               {trendLeverage * leverageRatio > maxLeverage && (
                 <span className="ml-1 text-red-500 dark:text-red-400 font-semibold">
                   (capped at {maxLeverage}x)
@@ -747,8 +1236,6 @@ export default memo(function PairTradingPanel({
           </div>
         )}
       </div>
-
-
 
       {/* Direction symmetry indicator */}
       <div className="flex items-center justify-center gap-2 py-1">

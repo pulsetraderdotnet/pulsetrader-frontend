@@ -2,7 +2,8 @@ export let chains: any = {
   Avalanche: 43114,
   Arbitrum: 42161,
   Ethereum: 1,
-  Solana: 1399811149
+  Solana: 1399811149,
+  ArbitrumSepolia: 421614
 };
 
 export let chainConfig: any = {
@@ -24,6 +25,13 @@ export let chainConfig: any = {
     isPerpetual: true,
     isActive: true,
   },
+  [chains.ArbitrumSepolia]: {
+    rpcUrls: [
+      "https://arbitrum-sepolia-rpc.publicnode.com",
+      "https://arbitrum-sepolia-rpc.publicnode.com"
+    ],
+    isActive: false,
+  }
 };
 
 export const isValidChain = (chainId: Number) => {

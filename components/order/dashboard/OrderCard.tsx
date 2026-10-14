@@ -19,6 +19,7 @@ import OrderAction from "@/components/order/dashboard/OrderAction";
 import LogicSummary from "@/components/order/common/LogicDisplay";
 import WeightDisplay from "@/components/order/common/WeightDisplay";
 import PriceEntry from "@/components/order/common/entryPriceDisplay";
+import { useOrderRsiEstimates } from "@/hooks/useOrderRsiEstimates";
 import type { OrderType } from "@/type/order";
 import type { MarketSnapshotRef } from "@/type/market";
 import {
@@ -82,6 +83,8 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
   const [liveMarkPrice, setLiveMarkPrice] = useState(
     () => marketSnapshotRef?.current?.markPrice || 0
   );
+
+  const rsiEstimates = useOrderRsiEstimates(order, livePriceUsd);
 
   const syncLiveMarketState = useCallback(() => {
     const nextPriceUsd = marketSnapshotRef?.current?.priceUsd || "0";
@@ -335,6 +338,34 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
                 </button>
                 {/* Mode Badge */}
                 {getOrderModeBadge(order.orderMode)}
+
+                {/* Estimated Target Price on Target RSI Badge */}
+                {order.orderStatus === "PENDING" && rsiEstimates.length > 0 && (
+                  <span
+                    className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 border border-purple-300/40 dark:border-purple-700/40 flex items-center gap-1"
+                    title={`Estimated Target Price at RSI: ${rsiEstimates
+                      .map(
+                        (e) =>
+                          `RSI ${e.operator} ${e.targetRSI} (${e.timeframe}) -> ${
+                            e.targetPrice !== null
+                              ? `$${e.targetPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}`
+                              : "Unreachable"
+                          }`
+                      )
+                      .join("; ")}`}
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
+                    <span>Est:</span>
+                    {rsiEstimates[0].targetPrice !== null ? (
+                      <span className="inline-flex items-baseline">${displayNumber(rsiEstimates[0].targetPrice)}</span>
+                    ) : (
+                      <span>Unreachable</span>
+                    )}
+                    <span className="text-[9px] opacity-75">
+                      (RSI {rsiEstimates[0].targetRSI})
+                    </span>
+                  </span>
+                )}
               </div>
               {isExpanded ? <IoIosArrowDropright /> : <IoIosArrowDropdown />}
             </div>
@@ -348,13 +379,40 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
               <div>
                 <span className="text-xs text-gray-500">Entry Criteria  </span>
                 {isTechEntry ? (
-                  order.entry?.entryCriteria === "logic" && order.entry?.technicalLogic ? (
-                    <div className="overflow-x-auto pb-1 scrollbar-thin">
-                      <LogicSummary node={order.entry.technicalLogic} />
-                    </div>
-                  ) : order.entry?.entryCriteria === "weight" && order.entry?.technicalWeights ? (
-                    <WeightDisplay weights={order.entry.technicalWeights} />
-                  ) : null
+                  <>
+                    {order.entry?.entryCriteria === "logic" && order.entry?.technicalLogic ? (
+                      <div className="overflow-x-auto pb-1 scrollbar-thin">
+                        <LogicSummary node={order.entry.technicalLogic} />
+                      </div>
+                    ) : order.entry?.entryCriteria === "weight" && order.entry?.technicalWeights ? (
+                      <WeightDisplay weights={order.entry.technicalWeights} />
+                    ) : null}
+
+                    {rsiEstimates.length > 0 && (
+                      <div className="mt-1.5 flex flex-col gap-1">
+                        {rsiEstimates.map((est, idx) => (
+                          <div
+                            key={idx}
+                            className="flex items-center gap-1.5 text-[11px] bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800/50 rounded px-2 py-0.5 w-fit text-purple-800 dark:text-purple-200"
+                          >
+                            <span className="font-semibold text-purple-600 dark:text-purple-400">
+                              Est. Target ({est.timeframe}):
+                            </span>
+                            <span className="font-mono font-medium inline-flex items-baseline">
+                              {est.targetPrice !== null ? (
+                                <>${displayNumber(est.targetPrice)}</>
+                              ) : (
+                                "Unreachable"
+                              )}
+                            </span>
+                            <span className="text-[10px] text-gray-500 dark:text-gray-400">
+                              (RSI {est.operator} {est.targetRSI} | Cur: {est.currentRSI.toFixed(1)})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 ) : order.entry?.priceEntry ? (
                   <PriceEntry priceEntry={order.entry.priceEntry!} />
                 ) : (
@@ -448,14 +506,30 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
                 </div>
               </div>
 
-              {entryPrice && entryPrice !== "0" && (
+              {entryPrice && entryPrice !== "0" ? (
                 <div>
                   <span className="text-xs text-gray-500">Entry at</span>
                   <div className="text-sm font-medium flex items-center gap-1">
                     {formatUSD(entryPrice)}
                   </div>
                 </div>
-              )}
+              ) : rsiEstimates.length > 0 ? (
+                <div>
+                  <span className="text-xs text-purple-600 dark:text-purple-400 flex items-center gap-1">
+                    Est. RSI Entry at
+                  </span>
+                  <div className="text-sm font-medium flex items-center gap-1 text-purple-700 dark:text-purple-300">
+                    {rsiEstimates[0].targetPrice !== null ? (
+                      <span className="inline-flex items-baseline font-mono">${displayNumber(rsiEstimates[0].targetPrice)}</span>
+                    ) : (
+                      "Unreachable"
+                    )}
+                    <span className="text-[10px] text-gray-400 font-normal">
+                      (@ RSI {rsiEstimates[0].targetRSI})
+                    </span>
+                  </div>
+                </div>
+              ) : null}
 
               {shouldShowPnl && (
                 <div>

@@ -26,6 +26,7 @@ import { ActivityType, UserType, WalletType } from "@/type/common";
 
 import { getWalletBalance } from "@/lib/blockchain/balance";
 import { fetchCodexWalletBalances } from "@/lib/oracle/codex";
+import { getPerpExchangeAvailableBalance } from "@/lib/oracle/perpAccountState";
 
 import ChainSelection from "@/components/navbar/chainSelection";
 import WalletOverview from "./walletOverview";
@@ -152,8 +153,8 @@ export default function PortfolioMain(props: PortfolioMainProps) {
       const results = await Promise.allSettled([
         fetchCodexWalletBalances({ walletAddress, chainId, limit: 100 }),
         getWalletBalance({ walletAddress, chainId }),
-        Service.getPerpBalance({ walletAddress, exchange: "asterdex" }) as Promise<any>,
-        Service.getPerpBalance({ walletAddress, exchange: "hyperliquid" }) as Promise<any>,
+        getPerpExchangeAvailableBalance(walletAddress, "asterdex", true),
+        getPerpExchangeAvailableBalance(walletAddress, "hyperliquid", true),
       ]);
 
       // Guard against stale requests
@@ -167,16 +168,15 @@ export default function PortfolioMain(props: PortfolioMainProps) {
 
       const walletInfo = walletInfoResult.status === "fulfilled" ? walletInfoResult.value : [];
       const nativeBalance = nativeBalanceResult.status === "fulfilled" ? nativeBalanceResult.value : BigInt(0);
-      const asterdexRes = asterdexResult.status === "fulfilled" ? asterdexResult.value : { balance: 0 };
-      const hyperRes = hyperResult.status === "fulfilled" ? hyperResult.value : { balance: 0 };
+      const asterDexRes = asterdexResult.status === "fulfilled" ? asterdexResult.value : 0;
+      const hyperliquidRes = hyperResult.status === "fulfilled" ? hyperResult.value : 0;
 
       // Extract perp balances (same logic as before)
-      const extractPerpBal = (res: any): string => {
-        const raw = res?.availableValue ?? 0;
-        return String(safeParseUnits(String(Number(raw)), PRECISION_DECIMALS));
+      const extractPerpBal = (balance: any): string => {
+        return String(safeParseUnits(String(Number(balance)), PRECISION_DECIMALS));
       };
-      const asterdexBal = extractPerpBal(asterdexRes);
-      const hyperliquidBal = extractPerpBal(hyperRes);
+      const asterdexBal = extractPerpBal(asterDexRes);
+      const hyperliquidBal = extractPerpBal(hyperliquidRes);
 
       // Compute spot totals
       let totalSpotUsd = BigInt(0);
