@@ -1145,7 +1145,7 @@ function SpotTradeBox({
 
           <SlippageInput slippage={slippage} onChange={setSlippage} />
 
-          {selectedStrategy.id !== "sellToken" && (
+          {(selectedStrategy.id !== "sellToken") || (gridNumber > 1 && gridNumber != selectedWalletCount) && (
             <ReEntranceInput
               isReEntrance={isReEntrance}
               setIsReEntrance={setIsReEntrance}

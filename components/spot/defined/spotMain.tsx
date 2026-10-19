@@ -246,7 +246,7 @@ export default function DefinedSpotMain({
       }
     };
 
-    const intervalId = setInterval(pollPrice, 5000);
+    const intervalId = setInterval(pollPrice, 10000);
     return () => clearInterval(intervalId);
   }, [staticInfo]); // Only re-create interval if static info (identity) changes
 

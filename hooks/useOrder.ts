@@ -64,7 +64,6 @@ export const useOrder = () => {
       feeTokenPrice,
       user,
       orderLabel,
-      orderLable,
     } = config;
 
     const validTargetPrice =
@@ -160,11 +159,16 @@ export const useOrder = () => {
       isActive: true,
       isBusy: false,
       additional: {
-        orderLabel: orderLabel || config.additional?.orderLabel,
         priority: Number(priority),
         executionSpeed,
         retry: 0,
         inProcessing: null,
+      },
+      pairTrading: {
+        orderLabel: orderLabel || null,
+        isGridOrder: gridNumber > 1,
+        ...(strategy == 'pairTrading' && orderLabel == 'trend' && { counterTrendOrder: { isOpened: false, orderId: null } }),
+        ...(strategy == 'pairTrading' && orderLabel == 'counterTrend' && { trendOrder: { isOpened: false, orderId: null } }),
       },
       cost: {
         txFeeInUsd: "0",

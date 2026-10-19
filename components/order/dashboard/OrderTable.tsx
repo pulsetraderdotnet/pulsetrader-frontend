@@ -167,6 +167,11 @@ const OrderTableRow = memo(
                   ({tp.takeProfitPctBps / 100}%)
                 </span>
               )}
+              {BigInt(tp.profitUsd) > BigInt(0) && (
+                <span className="text-[10px] text-gray-400">
+                  {formatUSD(tp.profitUsd)}
+                </span>
+              )}
             </div>
           ) : (
             <div className="text-xs text-green-600 dark:text-green-400">
@@ -312,7 +317,7 @@ const OrderTableRow = memo(
           <div className="flex flex-col gap-1 text-xs">
             <div className="flex items-center gap-1">
               <span className="flex gap-1 font-medium text-gray-700 dark:text-gray-300">
-                {amountDisplay} {amountSymbol}
+                {order?.pairTrading?.isGridOrder && order?.pairTrading?.orderLabel == 'counterTrend' && order.orderStatus == 'PENDING' ? 'Upto' : ''} {amountDisplay} {amountSymbol}
               </span>
             </div>
           </div>

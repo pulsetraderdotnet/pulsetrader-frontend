@@ -5,10 +5,7 @@ import { fetchDexScreenerTokenPrice } from "./dexscreener";
 export const getTokenPrices = async ({ tokenAddress, chainId }: { tokenAddress: string; chainId: number }) => {
     let tokenPrice;
     try {
-        tokenPrice = await fetchBirdEyePrice({ tokenAddress, chainId });
-        if (!tokenPrice) {
-            tokenPrice = await fetchDexScreenerTokenPrice({ tokenAddress, chainId });
-        }
+        tokenPrice = await fetchDexScreenerTokenPrice({ tokenAddress, chainId });
         if (!tokenPrice) {
             tokenPrice = await fetchCodexTokenPrice({ tokenAddress, chainId });
         }

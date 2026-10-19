@@ -51,7 +51,7 @@ export default function NavbarRight({ pathname }: { pathname: any }) {
 
   useEffect(() => {
     updateSystemInfo();
-  }, [updateSystemInfo]);
+  }, []);
 
   return (
     <div className="flex items-center gap-2 md:gap-4">

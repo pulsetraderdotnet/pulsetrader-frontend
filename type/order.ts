@@ -206,6 +206,19 @@ export type OrderType = {
     inProcessing?: any | null;          // default: null
   };
 
+  pairTrading?: {
+    orderLabel: string;                 // default: null
+    isGridOrder?: boolean;               // default: false
+    counterTrendOrder?: {
+      isOpened: boolean;                // default: false
+      orderId: string | null;           // default: null
+    };
+    trendOrder?: {
+      isOpened: boolean;                // default: false
+      orderId: string | null;           // default: null
+    };
+  }
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;

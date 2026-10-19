@@ -322,7 +322,7 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
                       : "text-green-600 dark:text-green-400"
                       }`}
                   >
-                    {order?.additional?.orderLabel ? order?.additional?.orderLabel : ''}{order.perp?.isLong ? "LONG" : "SHORT"}
+                    {order?.pairTrading?.orderLabel ?? ''}{order.perp?.isLong ? "LONG" : "SHORT"}
                   </span>
                 )}
                 <span>
@@ -346,10 +346,9 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
                     title={`Estimated Target Price at RSI: ${rsiEstimates
                       .map(
                         (e) =>
-                          `RSI ${e.operator} ${e.targetRSI} (${e.timeframe}) -> ${
-                            e.targetPrice !== null
-                              ? `$${e.targetPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}`
-                              : "Unreachable"
+                          `RSI ${e.operator} ${e.targetRSI} (${e.timeframe}) -> ${e.targetPrice !== null
+                            ? `$${e.targetPrice.toLocaleString(undefined, { maximumFractionDigits: 4 })}`
+                            : "Unreachable"
                           }`
                       )
                       .join("; ")}`}
@@ -423,7 +422,7 @@ const OrderCard = ({ order, marketSnapshotRef }: OrderCardProps) => {
               <div>
                 <span className="text-xs text-gray-500">Order Size</span>
                 <div className="text-sm font-medium flex items-center gap-1">
-                  {formattedSize}
+                  {formattedSize} {order?.pairTrading?.isGridOrder && order?.pairTrading?.orderLabel == 'counterTrend' && 'Max'}
                   <p>{collateralToken?.symbol || "UNK"}</p>
                 </div>
               </div>
